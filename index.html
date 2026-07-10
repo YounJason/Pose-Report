@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a1a;
+            color: white;
+            font-family: sans-serif;
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            gap: 15px;
+        }
+
+        .intro-panel {
+            background: #2a2a2a;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            width: 340px;
+            text-align: left;
+        }
+
+        .intro-panel h2 {
+            text-align: center;
+            margin-top: 0;
+            color: #00ffcc;
+        }
+
+        .form-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .form-row label {
+            font-size: 0.95rem;
+            font-weight: bold;
+        }
+
+        input[type="number"], select {
+            padding: 6px 10px;
+            font-size: 1rem;
+            border-radius: 6px;
+            border: none;
+            background-color: #333;
+            color: #00ffcc;
+            font-weight: bold;
+            width: 80px;
+            text-align: center;
+        }
+
+        select {
+            width: 110px;
+        }
+
+        input:focus, select:focus {
+            outline: 2px solid #00ffcc;
+        }
+
+        .start-btn {
+            padding: 12px;
+            font-size: 1.1rem;
+            border-radius: 6px;
+            border: none;
+            background-color: #00ffcc;
+            color: #1a1a1a;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 15px;
+            text-align: center;
+        }
+
+        .start-btn:hover {
+            background-color: #00ccaa;
+        }
+
+        img {
+            max-width: 90%;
+            max-height: 70vh;
+            width: auto;
+            height: auto;
+            border-radius: 12px;
+            background: #000;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            object-fit: contain;
+        }
+
+        #status-display {
+            font-size: 1.6rem;
+            font-weight: bold;
+            padding: 12px 24px;
+            border-radius: 8px;
+            width: 85%;
+            max-width: 720px;
+            box-sizing: border-box;
+            transition: all 0.2s ease;
+        }
+
+        .normal {
+            background-color: rgba(0, 255, 204, 0.15);
+            color: #00ffcc;
+            border: 2px solid #00ffcc;
+        }
+
+        .warning {
+            background-color: rgba(255, 51, 51, 0.15);
+            color: #ff3333;
+            border: 2px solid #ff3333;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" id="introView">
+        <div class="intro-panel">
+            <h2>자세 분석 시스템 설정</h2>
+            <div class="form-row">
+                <label>거북목 임계 각도:</label>
+                <input type="number" id="turtleThresh" value="10.0" step="0.5">
+            </div>
+            <div class="form-row">
+                <label>등 굽음 임계 각도:</label>
+                <input type="number" id="torsoThresh" value="20.0" step="0.5">
+            </div>
+            <div class="form-row">
+                <label>어깨 비대칭 각도:</label>
+                <input type="number" id="shoulderThresh" value="5.0" step="0.5">
+            </div>
+            <div class="form-row">
+                <label>골반 비대칭 각도:</label>
+                <input type="number" id="pelvisThresh" value="4.0" step="0.5">
+            </div>
+            <div class="form-row">
+                <label>목 기울어짐 각도:</label>
+                <input type="number" id="headThresh" value="5.0" step="0.5">
+            </div>
+            <div class="form-row">
+                <label>상체 불균형 각도:</label>
+                <input type="number" id="spineThresh" value="8.0" step="0.5">
+            </div>
+            <div class="form-row">
+                <label>카메라 장치 선택:</label>
+                <select id="cameraSelect">
+                    <option value="0" selected>Camera 0</option>
+                    <option value="1">Camera 1</option>
+                </select>
+            </div>
+            <button class="start-btn" onclick="requestStart()">시스템 시작</button>
+        </div>
+    </div>
+
+    <div class="container" id="mainView" style="display: none;">
+        <div id="status-display" class="normal">정상</div>
+        <img id="video">
+    </div>
+
+    <script>
+        function requestStart() {
+            var turtle = document.getElementById('turtleThresh').value;
+            var torso = document.getElementById('torsoThresh').value;
+            var shoulder = document.getElementById('shoulderThresh').value;
+            var pelvis = document.getElementById('pelvisThresh').value;
+            var head = document.getElementById('headThresh').value;
+            var spine = document.getElementById('spineThresh').value;
+            var camIdx = document.getElementById('cameraSelect').value;
+
+            if (window.pywebview && window.pywebview.api) {
+                window.pywebview.api.setup_and_start(turtle, torso, shoulder, pelvis, head, spine, camIdx);
+                document.getElementById('introView').style.display = 'none';
+                document.getElementById('mainView').style.display = 'flex';
+            }
+        }
+
+        function updateFrame(b64, statusText, isNormal) {
+            document.getElementById('video').src = "data:image/jpeg;base64," + b64;
+            var display = document.getElementById('status-display');
+            display.innerText = statusText;
+            if (isNormal === 1) {
+                display.className = "normal";
+            } else {
+                display.className = "warning";
+            }
+        }
+
+        window.addEventListener('keydown', function (e) {
+            if (e.key === 'F11') {
+                e.preventDefault();
+                if (window.pywebview && window.pywebview.api) {
+                    window.pywebview.api.toggle_fullscreen();
+                }
+            }
+        });
+    </script>
+</body>
+
+</html>
