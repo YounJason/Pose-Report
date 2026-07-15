@@ -120,6 +120,12 @@
             color: #ff3333;
             border: 2px solid #ff3333;
         }
+
+        .caution {
+            background-color: rgba(255, 204, 0, 0.15);
+            color: #ffcc00;
+            border: 2px solid #ffcc00;
+        }
     </style>
 </head>
 
@@ -188,8 +194,11 @@
             document.getElementById('video').src = "data:image/jpeg;base64," + b64;
             var display = document.getElementById('status-display');
             display.innerText = statusText;
+            
             if (isNormal === 1) {
                 display.className = "normal";
+            } else if (isNormal === 2) {
+                display.className = "caution";
             } else {
                 display.className = "warning";
             }
