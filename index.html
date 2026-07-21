@@ -8,246 +8,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Noto Sans KR', sans-serif;
-        }
-
-        body {
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            background-color: #ffffff;
-            color: #202124;
-        }
-
-        #app {
-            position: relative;
-            width: 100%;
-            height: 100%;
-        }
-
-        .screen {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            opacity: 0;
-            visibility: hidden;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            background-color: #ffffff;
-            z-index: 1;
-            padding: 40px;
-        }
-
-        .screen.active {
-            opacity: 1;
-            visibility: visible;
-            z-index: 10;
-        }
-
-        .fade-effect {
-            transition: opacity 0.8s ease-in-out, visibility 0.8s;
-        }
-
-        h1 {
-            font-size: 3.5rem;
-            font-weight: 700;
-            margin-bottom: 2.5rem;
-            z-index: 2;
-            letter-spacing: -0.5px;
-        }
-
-        h2 {
-            font-size: 1.75rem;
-            font-weight: 500;
-            margin-bottom: 1.5rem;
-            color: #202124;
-        }
-
-        p {
-            font-size: 1.25rem;
-            color: #5f6368;
-            line-height: 1.6;
-            text-align: center;
-        }
-
-        .btn {
-            background-color: #1a73e8;
-            color: #ffffff;
-            border: none;
-            border-radius: 24px;
-            padding: 14px 36px;
-            font-size: 1.1rem;
-            font-weight: 500;
-            cursor: pointer;
-            box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
-            transition: background-color 0.2s, box-shadow 0.2s;
-            z-index: 2;
-        }
-
-        .btn:hover {
-            background-color: #1557b0;
-            box-shadow: 0 1px 3px 0 rgba(60, 64, 67, 0.3), 0 4px 8px 3px rgba(60, 64, 67, 0.15);
-        }
-
-        .form-group {
-            margin-bottom: 10px;
-        }
-
-        .form-group label {
-            display: inline-block;
-            width: 180px;
-        }
-
-        .animated-bg {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 700px;
-            height: 700px;
-            transform: translate(-50%, -50%);
-            background: radial-gradient(circle, rgba(26, 115, 232, 0.3) 0%, rgba(255, 255, 255, 0) 70%);
-            border-radius: 50%;
-            animation: breathe 10s infinite alternate ease-in-out;
-            z-index: 0;
-        }
-
-        @keyframes breathe {
-            0% {
-                transform: translate(-50%, -50%) scale(0.85);
-                opacity: 0.5;
-            }
-
-            100% {
-                transform: translate(-50%, -50%) scale(1.15);
-                opacity: 1;
-            }
-        }
-
-        .qr-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 24px;
-            max-width: 500px;
-        }
-
-        .qr-target {
-            width: 260px;
-            height: 260px;
-            background-color: #ffffff;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .qr-target canvas,
-        .qr-target img {
-            width: 100% !important;
-            height: 100% !important;
-        }
-
-        .camera-layout {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 20px;
-            width: 100%;
-            max-width: 800px;
-        }
-
-        .viewfinder-wrapper {
-            position: relative;
-            width: 100%;
-            aspect-ratio: 4/3;
-            background-color: #f8f9fa;
-            border: 1px solid #dadce0;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        #viewfinder {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .status-overlay {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            right: 20px;
-            padding: 16px 24px;
-            border-radius: 8px;
-            font-size: 1.25rem;
-            font-weight: 500;
-            transition: background-color 0.3s;
-            text-align: center;
-        }
-
-        .status-normal {
-            background-color: rgba(230, 244, 234, 0.95);
-            color: #137333;
-        }
-
-        .status-warning {
-            background-color: rgba(254, 240, 240, 0.95);
-            color: #c5221f;
-        }
-
-        .status-unknown {
-            background-color: rgba(241, 243, 244, 0.95);
-            color: #3c4043;
-        }
-
-        .timer-badge {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background-color: rgba(32, 33, 36, 0.85);
-            color: #ffffff;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 1.5rem;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-        }
-
-        .report-layout {
-            display: flex;
-            width: 100%;
-            max-width: 900px;
-            gap: 32px;
-        }
-
-        .report-card {
-            flex: 1;
-            background: #ffffff;
-            border: 1px solid #dadce0;
-            border-radius: 8px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 48px 32px;
-            gap: 24px;
-        }
-    </style>
+    <link rel="stylesheet" href="style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 
 <body>
 
     <div id="app">
-        <div class="screen" id="screen-1" style="display: block; position: static; width: auto; height: auto; padding: 20px;">
+        <div class="screen setup-screen" id="screen-1">
             <h2>시스템 초기 설정</h2>
             <div class="form-group"><label>거북목 기준 각도</label><input type="number" id="cfg-turtle" value="10.0" step="0.1"></div>
             <div class="form-group"><label>등 굽음 기준 각도</label><input type="number" id="cfg-torso" value="20.0" step="0.1"></div>
@@ -256,7 +24,7 @@
             <div class="form-group"><label>목 기울어짐 기준 각도</label><input type="number" id="cfg-head" value="5.0" step="0.1"></div>
             <div class="form-group"><label>상체 불균형 기준 각도</label><input type="number" id="cfg-spine" value="8.0" step="0.1"></div>
             <div class="form-group"><label>카메라 장치 인덱스</label><input type="number" id="cfg-cam" value="0" step="1"></div>
-            <button id="btn-save" style="margin-top: 10px; padding: 5px 10px;">설정 완료</button>
+            <button id="btn-save" class="save-btn">설정 완료</button>
         </div>
 
         <div class="screen" id="screen-2">
@@ -285,162 +53,19 @@
         <div class="screen" id="screen-5">
             <div class="report-layout">
                 <div class="report-card">
-                    <div id="qrcode-download" class="qr-target" style="width: 200px; height: 200px;"></div>
-                    <p style="font-size: 1rem;">QR 코드를 스캔하시면 리포트 파일을 PDF로 받으실 수 있습니다.</p>
+                    <div id="qrcode-download" class="qr-target qr-target-download"></div>
+                    <p class="report-help-text">QR 코드를 스캔하시면 리포트 파일을 PDF로 받으실 수 있습니다.</p>
                 </div>
-                <p style="font-size: 1rem;"><br><br><br><br>또는</p>
+                <p class="report-help-text"><br><br><br><br>또는</p>
                 <div class="report-card">
                     <h2>리포트를 출력하시겠습니까?</h2>
-                    <button class="btn" style="background-color: #34a853;">출력하기</button>
+                    <button class="btn print-btn">출력하기</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <script>
-        const screens = document.querySelectorAll('.screen');
-        let currentIndex = 0;
-        let countdownInterval = null;
-        let privacyPollInterval = null;
-        const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
-
-        function initScreens() {
-            screens.forEach((screen, idx) => {
-                if (idx === 0) screen.removeAttribute('style');
-                screen.classList.toggle('active', idx === currentIndex);
-            });
-
-            if (typeof QRCode !== 'undefined') {
-                new QRCode(document.getElementById("qrcode-download"), {
-                    text: "example",
-                    width: 200,
-                    height: 200
-                });
-            }
-        }
-        initScreens();
-
-        function showScreen(index, useFade = true) {
-            if (index < 0 || index >= screens.length) return;
-
-            if (currentIndex === 3) {
-                clearInterval(countdownInterval);
-                if (window.pywebview) window.pywebview.api.toggle_camera(false);
-            }
-
-            if (currentIndex === 2) clearInterval(privacyPollInterval);
-
-            screens.forEach(screen => screen.classList.toggle('fade-effect', useFade));
-            screens[currentIndex].classList.remove('active');
-            currentIndex = index;
-            screens[currentIndex].classList.add('active');
-
-            if (currentIndex === 2) startPrivacyConsentWorkflow();
-            if (currentIndex === 3) startCaptureSession();
-        }
-
-        function startPrivacyConsentWorkflow() {
-            const randomStr = Math.random().toString(36).substring(2, 9);
-            const qrUrl = `https://pose-report.netlify.app/#${randomStr}`;
-
-            try {
-                const qrContainer = document.getElementById("qrcode-privacy");
-                qrContainer.innerHTML = "";
-                new QRCode(qrContainer, { text: qrUrl, width: 260, height: 260 });
-            } catch (qrErr) { }
-
-            const targetUrl = `${SUPABASE_URL}/rest/v1/privacy?id=eq.${randomStr}&select=*`;
-            clearInterval(privacyPollInterval);
-
-            privacyPollInterval = setInterval(() => {
-                if (window.pywebview?.api?.get_supabase_key) {
-                    window.pywebview.api.get_supabase_key().then(anonKey => {
-                        fetch(targetUrl, {
-                            method: 'GET',
-                            headers: {
-                                'apikey': anonKey,
-                                'Authorization': `Bearer ${anonKey}`,
-                                'Accept': 'application/json'
-                            }
-                        })
-                        .then(res => res.ok ? res.json() : Promise.reject())
-                        .then(data => {
-                            if (Array.isArray(data) && data.length >= 1) {
-                                clearInterval(privacyPollInterval);
-                                showScreen(3, true);
-                            }
-                        })
-                        .catch(() => {});
-                    }).catch(() => {});
-                }
-            }, 1000);
-        }
-
-        document.getElementById('btn-save').addEventListener('click', () => {
-            if (window.pywebview?.api) {
-                window.pywebview.api.setup_and_start(
-                    document.getElementById('cfg-turtle').value,
-                    document.getElementById('cfg-torso').value,
-                    document.getElementById('cfg-shoulder').value,
-                    document.getElementById('cfg-pelvis').value,
-                    document.getElementById('cfg-head').value,
-                    document.getElementById('cfg-spine').value,
-                    document.getElementById('cfg-cam').value
-                );
-            }
-            showScreen(1, false);
-        });
-
-        document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
-
-        function startCaptureSession() {
-            if (window.pywebview) window.pywebview.api.toggle_camera(true);
-
-            let timeLeft = 60;
-            const timerEl = document.getElementById('timer');
-            timerEl.innerText = "01:00";
-
-            countdownInterval = setInterval(() => {
-                timeLeft--;
-                const mins = String(Math.floor(timeLeft / 60)).padStart(2, '0');
-                const secs = String(timeLeft % 60).padStart(2, '0');
-                timerEl.innerText = `${mins}:${secs}`;
-
-                if (timeLeft <= 0) {
-                    clearInterval(countdownInterval);
-                    showScreen(4, true);
-                }
-            }, 1000);
-        }
-
-        function updateFrame(base64Image, statusText, isNormal) {
-            if (currentIndex !== 3) return;
-
-            document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
-
-            const statusBox = document.getElementById('status-box');
-            statusBox.innerText = statusText;
-            statusBox.className = "status-overlay";
-
-            if (isNormal === 1) statusBox.classList.add("status-normal");
-            else if (isNormal === 0) statusBox.classList.add("status-warning");
-            else statusBox.classList.add("status-unknown");
-        }
-
-        window.updateFrame = updateFrame;
-
-        window.addEventListener('keydown', (e) => {
-            if (e.ctrlKey) {
-                if (e.key === 'ArrowRight') {
-                    e.preventDefault();
-                    showScreen(currentIndex + 1, false);
-                } else if (e.key === 'ArrowLeft') {
-                    e.preventDefault();
-                    showScreen(currentIndex - 1, false);
-                }
-            }
-        });
-    </script>
+    <script src="script.js"></script>
 
 </body>
 

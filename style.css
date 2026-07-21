@@ -1,0 +1,257 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Noto Sans KR', sans-serif;
+}
+
+body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background-color: #ffffff;
+    color: #202124;
+}
+
+#app {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.screen {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    visibility: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background-color: #ffffff;
+    z-index: 1;
+    padding: 40px;
+}
+
+.screen.active {
+    opacity: 1;
+    visibility: visible;
+    z-index: 10;
+}
+
+.setup-screen {
+    display: block;
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 20px;
+}
+
+.fade-effect {
+    transition: opacity 0.8s ease-in-out, visibility 0.8s;
+}
+
+h1 {
+    font-size: 3.5rem;
+    font-weight: 700;
+    margin-bottom: 2.5rem;
+    z-index: 2;
+    letter-spacing: -0.5px;
+}
+
+h2 {
+    font-size: 1.75rem;
+    font-weight: 500;
+    margin-bottom: 1.5rem;
+    color: #202124;
+}
+
+p {
+    font-size: 1.25rem;
+    color: #5f6368;
+    line-height: 1.6;
+    text-align: center;
+}
+
+.btn {
+    background-color: #1a73e8;
+    color: #ffffff;
+    border: none;
+    border-radius: 24px;
+    padding: 14px 36px;
+    font-size: 1.1rem;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+    transition: background-color 0.2s, box-shadow 0.2s;
+    z-index: 2;
+}
+
+.btn:hover {
+    background-color: #1557b0;
+    box-shadow: 0 1px 3px 0 rgba(60, 64, 67, 0.3), 0 4px 8px 3px rgba(60, 64, 67, 0.15);
+}
+
+.form-group {
+    margin-bottom: 10px;
+}
+
+.form-group label {
+    display: inline-block;
+    width: 180px;
+}
+
+.animated-bg {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 700px;
+    height: 700px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, rgba(26, 115, 232, 0.3) 0%, rgba(255, 255, 255, 0) 70%);
+    border-radius: 50%;
+    animation: breathe 10s infinite alternate ease-in-out;
+    z-index: 0;
+}
+
+@keyframes breathe {
+    0% {
+        transform: translate(-50%, -50%) scale(0.85);
+        opacity: 0.5;
+    }
+
+    100% {
+        transform: translate(-50%, -50%) scale(1.15);
+        opacity: 1;
+    }
+}
+
+.qr-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    max-width: 500px;
+}
+
+.qr-target {
+    width: 260px;
+    height: 260px;
+    background-color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.qr-target canvas,
+.qr-target img {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.qr-target-download {
+    width: 200px;
+    height: 200px;
+}
+
+.camera-layout {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    width: 100%;
+    max-width: 800px;
+}
+
+.viewfinder-wrapper {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    background-color: #f8f9fa;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+#viewfinder {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.status-overlay {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    right: 20px;
+    padding: 16px 24px;
+    border-radius: 8px;
+    font-size: 1.25rem;
+    font-weight: 500;
+    transition: background-color 0.3s;
+    text-align: center;
+}
+
+.status-normal {
+    background-color: rgba(230, 244, 234, 0.95);
+    color: #137333;
+}
+
+.status-warning {
+    background-color: rgba(254, 240, 240, 0.95);
+    color: #c5221f;
+}
+
+.status-unknown {
+    background-color: rgba(241, 243, 244, 0.95);
+    color: #3c4043;
+}
+
+.timer-badge {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background-color: rgba(32, 33, 36, 0.85);
+    color: #ffffff;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.report-layout {
+    display: flex;
+    width: 100%;
+    max-width: 900px;
+    gap: 32px;
+}
+
+.report-card {
+    flex: 1;
+    background: #ffffff;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 32px;
+    gap: 24px;
+}
+
+.report-help-text {
+    font-size: 1rem;
+}
+
+.print-btn {
+    background-color: #34a853;
+}
+
+.save-btn {
+    margin-top: 10px;
+    padding: 5px 10px;
+}
