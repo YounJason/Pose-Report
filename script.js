@@ -144,4 +144,12 @@ window.addEventListener('keydown', (e) => {
             showScreen(currentIndex - 1, false);
         }
     }
+    if (e.key === 'F11') {
+        e.preventDefault();
+        if (window.pywebview) window.pywebview.api.toggle_fullscreen();
+    }
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        if (window.pywebview) window.pywebview.api.close_window();
+    }
 });

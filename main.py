@@ -199,6 +199,9 @@ class CameraApp:
 
     def toggle_fullscreen(self):
         window.toggle_fullscreen()
+    
+    def close_window(self):
+        window.destroy()
 
     def toggle_camera(self, enabled):
         with self.lock:
@@ -209,7 +212,7 @@ class CameraApp:
 
 if __name__ == '__main__':
     app_logic = CameraApp()
-    window = webview.create_window('MediaPipe Pose', 'index.html', width=800, height=600, js_api=app_logic)
+    window = webview.create_window('Pose Report', 'index.html', width=800, height=600, js_api=app_logic)
     window.events.closing += app_logic.on_closing
     threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
     webview.start()
