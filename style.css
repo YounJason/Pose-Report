@@ -230,7 +230,7 @@ p {
     justify-content: center;
     gap: 18px;
     text-align: center;
-    padding: 32px;
+    padding: 40px 40px 20px;
     background-color: #f8f9fa;
     border: 1px solid #dadce0;
     border-radius: 16px;
