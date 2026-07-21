@@ -3,216 +3,445 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pose Analytics Kiosk</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        body {
+        * {
+            box-sizing: border-box;
             margin: 0;
-            background: #1a1a1a;
-            color: white;
-            font-family: sans-serif;
-            text-align: center;
+            padding: 0;
+            font-family: 'Noto Sans KR', sans-serif;
         }
 
-        .container {
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #ffffff;
+            color: #202124;
+        }
+
+        #app {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            visibility: hidden;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
-            gap: 15px;
+            background-color: #ffffff;
+            z-index: 1;
+            padding: 40px;
         }
 
-        .intro-panel {
-            background: #2a2a2a;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        .screen.active {
+            opacity: 1;
+            visibility: visible;
+            z-index: 10;
+        }
+
+        .fade-effect {
+            transition: opacity 0.8s ease-in-out, visibility 0.8s;
+        }
+
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin-bottom: 2.5rem;
+            z-index: 2;
+            letter-spacing: -0.5px;
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            font-weight: 500;
+            margin-bottom: 1.5rem;
+            color: #202124;
+        }
+
+        p {
+            font-size: 1.25rem;
+            color: #5f6368;
+            line-height: 1.6;
+            text-align: center;
+        }
+
+        .btn {
+            background-color: #1a73e8;
+            color: #ffffff;
+            border: none;
+            border-radius: 24px;
+            padding: 14px 36px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            cursor: pointer;
+            box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+            transition: background-color 0.2s, box-shadow 0.2s;
+            z-index: 2;
+        }
+
+        .btn:hover {
+            background-color: #1557b0;
+            box-shadow: 0 1px 3px 0 rgba(60, 64, 67, 0.3), 0 4px 8px 3px rgba(60, 64, 67, 0.15);
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+        }
+
+        .form-group label {
+            display: inline-block;
+            width: 180px;
+        }
+
+        .animated-bg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 700px;
+            height: 700px;
+            transform: translate(-50%, -50%);
+            background: radial-gradient(circle, rgba(26, 115, 232, 0.3) 0%, rgba(255, 255, 255, 0) 70%);
+            border-radius: 50%;
+            animation: breathe 10s infinite alternate ease-in-out;
+            z-index: 0;
+        }
+
+        @keyframes breathe {
+            0% {
+                transform: translate(-50%, -50%) scale(0.85);
+                opacity: 0.5;
+            }
+
+            100% {
+                transform: translate(-50%, -50%) scale(1.15);
+                opacity: 1;
+            }
+        }
+
+        .qr-container {
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            width: 340px;
-            text-align: left;
-        }
-
-        .intro-panel h2 {
-            text-align: center;
-            margin-top: 0;
-            color: #00ffcc;
-        }
-
-        .form-row {
-            display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 24px;
+            max-width: 500px;
         }
 
-        .form-row label {
-            font-size: 0.95rem;
-            font-weight: bold;
+        .qr-target {
+            width: 260px;
+            height: 260px;
+            background-color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        input[type="number"], select {
-            padding: 6px 10px;
-            font-size: 1rem;
-            border-radius: 6px;
-            border: none;
-            background-color: #333;
-            color: #00ffcc;
-            font-weight: bold;
-            width: 80px;
-            text-align: center;
+        .qr-target canvas,
+        .qr-target img {
+            width: 100% !important;
+            height: 100% !important;
         }
 
-        select {
-            width: 110px;
+        .camera-layout {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            width: 100%;
+            max-width: 800px;
         }
 
-        input:focus, select:focus {
-            outline: 2px solid #00ffcc;
-        }
-
-        .start-btn {
-            padding: 12px;
-            font-size: 1.1rem;
-            border-radius: 6px;
-            border: none;
-            background-color: #00ffcc;
-            color: #1a1a1a;
-            font-weight: bold;
-            cursor: pointer;
-            margin-top: 15px;
-            text-align: center;
-        }
-
-        .start-btn:hover {
-            background-color: #00ccaa;
-        }
-
-        img {
-            max-width: 90%;
-            max-height: 70vh;
-            width: auto;
-            height: auto;
-            border-radius: 12px;
-            background: #000;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-            object-fit: contain;
-        }
-
-        #status-display {
-            font-size: 1.6rem;
-            font-weight: bold;
-            padding: 12px 24px;
+        .viewfinder-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background-color: #f8f9fa;
+            border: 1px solid #dadce0;
             border-radius: 8px;
-            width: 85%;
-            max-width: 720px;
-            box-sizing: border-box;
-            transition: all 0.2s ease;
+            overflow: hidden;
         }
 
-        .normal {
-            background-color: rgba(0, 255, 204, 0.15);
-            color: #00ffcc;
-            border: 2px solid #00ffcc;
+        #viewfinder {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
 
-        .warning {
-            background-color: rgba(255, 51, 51, 0.15);
-            color: #ff3333;
-            border: 2px solid #ff3333;
+        .status-overlay {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            padding: 16px 24px;
+            border-radius: 8px;
+            font-size: 1.25rem;
+            font-weight: 500;
+            transition: background-color 0.3s;
+            text-align: center;
         }
 
-        .caution {
-            background-color: rgba(255, 204, 0, 0.15);
-            color: #ffcc00;
-            border: 2px solid #ffcc00;
+        .status-normal {
+            background-color: rgba(230, 244, 234, 0.95);
+            color: #137333;
+        }
+
+        .status-warning {
+            background-color: rgba(254, 240, 240, 0.95);
+            color: #c5221f;
+        }
+
+        .status-unknown {
+            background-color: rgba(241, 243, 244, 0.95);
+            color: #3c4043;
+        }
+
+        .timer-badge {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(32, 33, 36, 0.85);
+            color: #ffffff;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        .report-layout {
+            display: flex;
+            width: 100%;
+            max-width: 900px;
+            gap: 32px;
+        }
+
+        .report-card {
+            flex: 1;
+            background: #ffffff;
+            border: 1px solid #dadce0;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 32px;
+            gap: 24px;
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
 
 <body>
-    <div class="container" id="introView">
-        <div class="intro-panel">
-            <h2>자세 분석 시스템 설정</h2>
-            <div class="form-row">
-                <label>거북목 임계 각도:</label>
-                <input type="number" id="turtleThresh" value="10.0" step="0.5">
+
+    <div id="app">
+        <div class="screen" id="screen-1" style="display: block; position: static; width: auto; height: auto; padding: 20px;">
+            <h2>시스템 초기 설정</h2>
+            <div class="form-group"><label>거북목 기준 각도</label><input type="number" id="cfg-turtle" value="10.0" step="0.1"></div>
+            <div class="form-group"><label>등 굽음 기준 각도</label><input type="number" id="cfg-torso" value="20.0" step="0.1"></div>
+            <div class="form-group"><label>어깨 비대칭 기준 각도</label><input type="number" id="cfg-shoulder" value="5.0" step="0.1"></div>
+            <div class="form-group"><label>골반 비대칭 기준 각도</label><input type="number" id="cfg-pelvis" value="4.0" step="0.1"></div>
+            <div class="form-group"><label>목 기울어짐 기준 각도</label><input type="number" id="cfg-head" value="5.0" step="0.1"></div>
+            <div class="form-group"><label>상체 불균형 기준 각도</label><input type="number" id="cfg-spine" value="8.0" step="0.1"></div>
+            <div class="form-group"><label>카메라 장치 인덱스</label><input type="number" id="cfg-cam" value="0" step="1"></div>
+            <button id="btn-save" style="margin-top: 10px; padding: 5px 10px;">설정 완료</button>
+        </div>
+
+        <div class="screen" id="screen-2">
+            <div class="animated-bg"></div>
+            <h1>실시간 AI 자세 분석 시스템</h1>
+            <button class="btn" id="btn-start">시작하기</button>
+        </div>
+
+        <div class="screen" id="screen-3">
+            <div class="qr-container">
+                <div id="qrcode-privacy" class="qr-target"></div>
+                <p>QR코드를 스캔하여 개인정보 처리방침에 동의해주세요.</p>
             </div>
-            <div class="form-row">
-                <label>등 굽음 임계 각도:</label>
-                <input type="number" id="torsoThresh" value="20.0" step="0.5">
+        </div>
+
+        <div class="screen" id="screen-4">
+            <div class="camera-layout">
+                <div class="viewfinder-wrapper">
+                    <img id="viewfinder" alt="Camera Feed">
+                    <div class="timer-badge" id="timer">01:00</div>
+                    <div class="status-overlay status-unknown" id="status-box">인식 대기 중</div>
+                </div>
             </div>
-            <div class="form-row">
-                <label>어깨 비대칭 각도:</label>
-                <input type="number" id="shoulderThresh" value="5.0" step="0.5">
+        </div>
+
+        <div class="screen" id="screen-5">
+            <div class="report-layout">
+                <div class="report-card">
+                    <div id="qrcode-download" class="qr-target" style="width: 200px; height: 200px;"></div>
+                    <p style="font-size: 1rem;">QR 코드를 스캔하시면 리포트 파일을 PDF로 받으실 수 있습니다.</p>
+                </div>
+                <p style="font-size: 1rem;"><br><br><br><br>또는</p>
+                <div class="report-card">
+                    <h2>리포트를 출력하시겠습니까?</h2>
+                    <button class="btn" style="background-color: #34a853;">출력하기</button>
+                </div>
             </div>
-            <div class="form-row">
-                <label>골반 비대칭 각도:</label>
-                <input type="number" id="pelvisThresh" value="4.0" step="0.5">
-            </div>
-            <div class="form-row">
-                <label>목 기울어짐 각도:</label>
-                <input type="number" id="headThresh" value="5.0" step="0.5">
-            </div>
-            <div class="form-row">
-                <label>상체 불균형 각도:</label>
-                <input type="number" id="spineThresh" value="8.0" step="0.5">
-            </div>
-            <div class="form-row">
-                <label>카메라 장치 선택:</label>
-                <select id="cameraSelect">
-                    <option value="0" selected>Camera 0</option>
-                    <option value="1">Camera 1</option>
-                </select>
-            </div>
-            <button class="start-btn" onclick="requestStart()">시스템 시작</button>
         </div>
     </div>
 
-    <div class="container" id="mainView" style="display: none;">
-        <div id="status-display" class="normal">정상</div>
-        <img id="video">
-    </div>
-
     <script>
-        function requestStart() {
-            var turtle = document.getElementById('turtleThresh').value;
-            var torso = document.getElementById('torsoThresh').value;
-            var shoulder = document.getElementById('shoulderThresh').value;
-            var pelvis = document.getElementById('pelvisThresh').value;
-            var head = document.getElementById('headThresh').value;
-            var spine = document.getElementById('spineThresh').value;
-            var camIdx = document.getElementById('cameraSelect').value;
+        const screens = document.querySelectorAll('.screen');
+        let currentIndex = 0;
+        let countdownInterval = null;
+        let privacyPollInterval = null;
+        const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
-            if (window.pywebview && window.pywebview.api) {
-                window.pywebview.api.setup_and_start(turtle, torso, shoulder, pelvis, head, spine, camIdx);
-                document.getElementById('introView').style.display = 'none';
-                document.getElementById('mainView').style.display = 'flex';
+        function initScreens() {
+            screens.forEach((screen, idx) => {
+                if (idx === 0) screen.removeAttribute('style');
+                screen.classList.toggle('active', idx === currentIndex);
+            });
+
+            if (typeof QRCode !== 'undefined') {
+                new QRCode(document.getElementById("qrcode-download"), {
+                    text: "example",
+                    width: 200,
+                    height: 200
+                });
             }
         }
+        initScreens();
 
-        function updateFrame(b64, statusText, isNormal) {
-            document.getElementById('video').src = "data:image/jpeg;base64," + b64;
-            var display = document.getElementById('status-display');
-            display.innerText = statusText;
-            
-            if (isNormal === 1) {
-                display.className = "normal";
-            } else if (isNormal === 2) {
-                display.className = "caution";
-            } else {
-                display.className = "warning";
+        function showScreen(index, useFade = true) {
+            if (index < 0 || index >= screens.length) return;
+
+            if (currentIndex === 3) {
+                clearInterval(countdownInterval);
+                if (window.pywebview) window.pywebview.api.toggle_camera(false);
             }
+
+            if (currentIndex === 2) clearInterval(privacyPollInterval);
+
+            screens.forEach(screen => screen.classList.toggle('fade-effect', useFade));
+            screens[currentIndex].classList.remove('active');
+            currentIndex = index;
+            screens[currentIndex].classList.add('active');
+
+            if (currentIndex === 2) startPrivacyConsentWorkflow();
+            if (currentIndex === 3) startCaptureSession();
         }
 
-        window.addEventListener('keydown', function (e) {
-            if (e.key === 'F11') {
-                e.preventDefault();
-                if (window.pywebview && window.pywebview.api) {
-                    window.pywebview.api.toggle_fullscreen();
+        function startPrivacyConsentWorkflow() {
+            const randomStr = Math.random().toString(36).substring(2, 9);
+            const qrUrl = `https://pose-report.netlify.app/#${randomStr}`;
+
+            try {
+                const qrContainer = document.getElementById("qrcode-privacy");
+                qrContainer.innerHTML = "";
+                new QRCode(qrContainer, { text: qrUrl, width: 260, height: 260 });
+            } catch (qrErr) { }
+
+            const targetUrl = `${SUPABASE_URL}/rest/v1/privacy?id=eq.${randomStr}&select=*`;
+            clearInterval(privacyPollInterval);
+
+            privacyPollInterval = setInterval(() => {
+                if (window.pywebview?.api?.get_supabase_key) {
+                    window.pywebview.api.get_supabase_key().then(anonKey => {
+                        fetch(targetUrl, {
+                            method: 'GET',
+                            headers: {
+                                'apikey': anonKey,
+                                'Authorization': `Bearer ${anonKey}`,
+                                'Accept': 'application/json'
+                            }
+                        })
+                        .then(res => res.ok ? res.json() : Promise.reject())
+                        .then(data => {
+                            if (Array.isArray(data) && data.length >= 1) {
+                                clearInterval(privacyPollInterval);
+                                showScreen(3, true);
+                            }
+                        })
+                        .catch(() => {});
+                    }).catch(() => {});
+                }
+            }, 1000);
+        }
+
+        document.getElementById('btn-save').addEventListener('click', () => {
+            if (window.pywebview?.api) {
+                window.pywebview.api.setup_and_start(
+                    document.getElementById('cfg-turtle').value,
+                    document.getElementById('cfg-torso').value,
+                    document.getElementById('cfg-shoulder').value,
+                    document.getElementById('cfg-pelvis').value,
+                    document.getElementById('cfg-head').value,
+                    document.getElementById('cfg-spine').value,
+                    document.getElementById('cfg-cam').value
+                );
+            }
+            showScreen(1, false);
+        });
+
+        document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
+
+        function startCaptureSession() {
+            if (window.pywebview) window.pywebview.api.toggle_camera(true);
+
+            let timeLeft = 60;
+            const timerEl = document.getElementById('timer');
+            timerEl.innerText = "01:00";
+
+            countdownInterval = setInterval(() => {
+                timeLeft--;
+                const mins = String(Math.floor(timeLeft / 60)).padStart(2, '0');
+                const secs = String(timeLeft % 60).padStart(2, '0');
+                timerEl.innerText = `${mins}:${secs}`;
+
+                if (timeLeft <= 0) {
+                    clearInterval(countdownInterval);
+                    showScreen(4, true);
+                }
+            }, 1000);
+        }
+
+        function updateFrame(base64Image, statusText, isNormal) {
+            if (currentIndex !== 3) return;
+
+            document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
+
+            const statusBox = document.getElementById('status-box');
+            statusBox.innerText = statusText;
+            statusBox.className = "status-overlay";
+
+            if (isNormal === 1) statusBox.classList.add("status-normal");
+            else if (isNormal === 0) statusBox.classList.add("status-warning");
+            else statusBox.classList.add("status-unknown");
+        }
+
+        window.updateFrame = updateFrame;
+
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey) {
+                if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    showScreen(currentIndex + 1, false);
+                } else if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    showScreen(currentIndex - 1, false);
                 }
             }
         });
     </script>
+
 </body>
 
 </html>
