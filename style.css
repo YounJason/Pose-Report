@@ -223,6 +223,35 @@ p {
     letter-spacing: 0.5px;
 }
 
+.loading-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    text-align: center;
+    padding: 32px;
+    background-color: #f8f9fa;
+    border: 1px solid #dadce0;
+    border-radius: 16px;
+    box-shadow: 0 2px 8px rgba(60, 64, 67, 0.08);
+}
+
+.loading-spinner {
+    width: 64px;
+    height: 64px;
+    border: 6px solid #e8f0fe;
+    border-top-color: #1a73e8;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .report-layout {
     display: flex;
     width: 100%;

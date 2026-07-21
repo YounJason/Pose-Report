@@ -2,6 +2,7 @@ const screens = document.querySelectorAll('.screen');
 let currentIndex = 0;
 let countdownInterval = null;
 let privacyPollInterval = null;
+let reportLoadingTimeout = null;
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
 function initScreens() {
@@ -29,6 +30,7 @@ function showScreen(index, useFade = true) {
     }
 
     if (currentIndex === 2) clearInterval(privacyPollInterval);
+    clearTimeout(reportLoadingTimeout);
 
     screens.forEach(screen => screen.classList.toggle('fade-effect', useFade));
     screens[currentIndex].classList.remove('active');
@@ -37,6 +39,9 @@ function showScreen(index, useFade = true) {
 
     if (currentIndex === 2) startPrivacyConsentWorkflow();
     if (currentIndex === 3) startCaptureSession();
+    if (currentIndex === 4) {
+        reportLoadingTimeout = setTimeout(() => showScreen(5, true), 3000);
+    }
 }
 
 function startPrivacyConsentWorkflow() {
