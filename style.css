@@ -122,7 +122,6 @@ p {
         transform: translate(-50%, -50%) scale(0.85);
         opacity: 0.5;
     }
-
     100% {
         transform: translate(-50%, -50%) scale(1.15);
         opacity: 1;
@@ -351,7 +350,8 @@ p {
 .progress-bar-fill {
     height: 100%;
     border-radius: 8px;
-    transition: width 0.8s ease-in-out;
+    width: 0%;
+    transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .fill-good { background-color: #34a853; }
@@ -388,8 +388,8 @@ p {
     stroke-width: 10;
     stroke-linecap: round;
     stroke-dasharray: 314;
-    stroke-dashoffset: 47;
-    transition: stroke-dashoffset 1s ease-in-out;
+    stroke-dashoffset: 314;
+    transition: stroke-dashoffset 1s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .score-text {
@@ -437,9 +437,8 @@ p {
 }
 
 .report-help-text {
-    font-size: 1.15rem;
-    color: #5f6368;
-    font-weight: 600;
+    color: gray;
+    font-size: 1rem;
 }
 
 .print-btn {

@@ -15,11 +15,11 @@ load_dotenv(dotenv_path=env_path) if os.path.exists(env_path) else load_dotenv()
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
-def ccw(A, B, C):
-    val = (B[1] - A[1]) * (C[0] - B[0]) - (B[0] - A[0]) * (C[1] - B[1])
-    return (val > 0) - (val < 0)
-
 def is_intersect(p1, q1, p2, q2):
+    def ccw(A, B, C):
+        val = (B[1] - A[1]) * (C[0] - B[0]) - (B[0] - A[0]) * (C[1] - B[1])
+        return (val > 0) - (val < 0)
+
     res1 = ccw(p1, q1, p2) * ccw(p1, q1, q2)
     res2 = ccw(p2, q2, p1) * ccw(p2, q2, q1)
     if res1 <= 0 and res2 <= 0:
@@ -36,6 +36,7 @@ class CameraApp:
         self.current_camera_idx = 0
         self.cap = None
         self.lock = threading.Lock()
+        
         self.TURTLE_NECK_ANGLE_THRESHOLD = 10.0
         self.TORSO_ANGLE_THRESHOLD = 20.0
         self.SHOULDER_ANGLE_THRESHOLD = 5.0
@@ -81,6 +82,10 @@ class CameraApp:
         nose = landmarks[mp_pose.PoseLandmark.NOSE]
         left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
         right_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR]
+        left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
+        right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
+        left_hip_lm = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
+        right_hip_lm = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
         
         dy = nose.y - (left_ear.y + right_ear.y) / 2
         dz = ((left_ear.z + right_ear.z) / 2) - nose.z
@@ -88,11 +93,6 @@ class CameraApp:
         if neck_angle > self.TURTLE_NECK_ANGLE_THRESHOLD:
             status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
             
-        left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
-        right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-        left_hip_lm = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
-        right_hip_lm = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
-        
         dy_torso = ((left_hip_lm.y + right_hip_lm.y) / 2) - ((left_shoulder.y + right_shoulder.y) / 2)
         dz_torso = ((left_hip_lm.z + right_hip_lm.z) / 2) - ((left_shoulder.z + right_shoulder.z) / 2)
         torso_angle = math.degrees(math.atan2(abs(dz_torso), dy_torso)) if dy_torso != 0 else 0
@@ -130,18 +130,14 @@ class CameraApp:
         left_ankle = (int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].x * w), int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].y * h))
         right_ankle = (int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].x * w), int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].y * h))
         
-        crossed = (
-            is_intersect(left_hip, left_knee, right_hip, right_knee) or
+        if (is_intersect(left_hip, left_knee, right_hip, right_knee) or
             is_intersect(left_hip, left_knee, right_knee, right_ankle) or
             is_intersect(left_knee, left_ankle, right_hip, right_knee) or
-            is_intersect(left_knee, left_ankle, right_knee, right_ankle)
-        )
-        if crossed:
+            is_intersect(left_knee, left_ankle, right_knee, right_ankle)):
             status_list.append("다리 꼬기")
         
         status_text = ", ".join(status_list) if status_list else "정상"
-        is_normal = 1 if status_text == "정상" else 0
-        return status_text, is_normal
+        return status_text, 1 if status_text == "정상" else 0
 
     def start_camera_thread(self):
         while self.running:
