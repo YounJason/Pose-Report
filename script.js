@@ -102,6 +102,21 @@ function showScreen(index, useFade = true) {
     }
 
     if (currentIndex === 4) {
+        const helptext = document.querySelector('.help-text');
+        const messages = [
+            "측정 결과를 분석하는 중...",
+            "LLM으로 리포트를 생성하는 중...",
+            "리포트 생성을 마무리 하는 중..."
+        ];
+        let msgIndex = 0;
+        const displayMessage = () => {
+            if (msgIndex < messages.length) {
+                helptext.innerText = messages[msgIndex];
+                msgIndex++;
+                setTimeout(displayMessage, 1000);
+            }
+        };
+        displayMessage();
         reportLoadingTimeout = setTimeout(() => showScreen(5, true), 3000);
     }
 
