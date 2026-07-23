@@ -58,15 +58,83 @@
         </div>
 
         <div class="screen" id="screen-6">
-            <div class="report-layout">
-                <div class="report-card">
-                    <div id="qrcode-download" class="qr-target qr-target-download"></div>
-                    <p class="report-help-text">QR 코드를 스캔하시면 리포트 파일을 PDF로 받으실 수 있습니다.</p>
-                </div>
-                <p class="report-help-text"><br><br><br><br>또는</p>
-                <div class="report-card">
-                    <h2>리포트를 출력하시겠습니까?</h2>
-                    <button class="btn print-btn">출력하기</button>
+            <div class="report-container">
+                <header class="report-header">
+                    <h1>실시간 자세 분석 리포트</h1>
+                </header>
+
+                <div class="report-grid">
+                    <div class="report-card metrics-card">
+                        <h2>세부 항목 측정 결과</h2>
+                        <div class="metrics-list">
+                            <div class="metric-item">
+                                <div class="metric-label">
+                                    <span>거북목 위험도</span>
+                                    <span class="metric-value status-good" id="val-turtle">양호 (4.2°)</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div class="progress-bar-fill fill-good" id="bar-turtle" style="width: 85%;"></div>
+                                </div>
+                            </div>
+
+                            <div class="metric-item">
+                                <div class="metric-label">
+                                    <span>등 · 허리 안정도</span>
+                                    <span class="metric-value status-good" id="val-torso">안정 (12.0°)</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div class="progress-bar-fill fill-good" id="bar-torso" style="width: 80%;"></div>
+                                </div>
+                            </div>
+
+                            <div class="metric-item">
+                                <div class="metric-label">
+                                    <span>어깨 균형</span>
+                                    <span class="metric-value status-warning" id="val-shoulder">주의 (5.8°)</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div class="progress-bar-fill fill-warning" id="bar-shoulder" style="width: 55%;"></div>
+                                </div>
+                            </div>
+
+                            <div class="metric-item">
+                                <div class="metric-label">
+                                    <span>골반 균형</span>
+                                    <span class="metric-value status-good" id="val-pelvis">정상 (2.1°)</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div class="progress-bar-fill fill-good" id="bar-pelvis" style="width: 90%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="report-card score-card">
+                        <h2>종합 자세 점수</h2>
+                        <div class="score-circle-wrapper">
+                            <svg class="score-ring" viewBox="0 0 120 120">
+                                <circle class="ring-bg" cx="60" cy="60" r="50"></circle>
+                                <circle class="ring-progress" id="score-ring-progress" cx="60" cy="60" r="50"></circle>
+                            </svg>
+                            <div class="score-text">
+                                <span class="score-num" id="report-score">85</span>
+                                <span class="score-total">/ 100</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="report-card action-card">
+                        <div id="qrcode-download" class="qr-target qr-target-download"></div>
+                        <p class="report-help-text">QR 스캔으로 PDF 소장</p>
+                        <button class="btn print-btn">리포트 출력하기</button>
+                    </div>
+
+                    <div class="report-card advice-card">
+                        <h2>AI 피드백</h2>
+                        <div class="advice-content" id="llm-advice">
+                            [텍스트]
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
