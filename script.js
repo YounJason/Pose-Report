@@ -8,6 +8,9 @@ let typingInterval = null;
 let timeLeft = 60;
 let isPaused = false; 
 
+let collectedScores = [];
+let finalScore = 0;
+
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
 screens.forEach((screen, idx) => {
@@ -48,7 +51,7 @@ function showScreen(index, useFade = true) {
     currentIndex = index;
     screens[currentIndex].classList.add('active');
 
-if (currentIndex === 2) {
+    if (currentIndex === 2) {
         const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) 
             ? crypto.randomUUID() 
             : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -65,7 +68,7 @@ if (currentIndex === 2) {
             new QRCode(qrContainer, { text: qrUrl, width: 260, height: 260 });
         } catch (qrErr) { }
 
-        const targetUrl = `${SUPABASE_URL}/rest/v1/privacy?id=eq.${uuid}&select=*`;
+        const targetUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${uuid}&select=*`;
         clearInterval(privacyPollInterval);
 
         privacyPollInterval = setInterval(() => {
@@ -95,6 +98,8 @@ if (currentIndex === 2) {
     if (currentIndex === 3) {
         if (window.pywebview) window.pywebview.api.toggle_camera(true);
 
+        collectedScores = [];
+
         timeLeft = 60;
         isPaused = false;
         const timerEl = document.getElementById('timer');
@@ -109,6 +114,14 @@ if (currentIndex === 2) {
 
             if (timeLeft <= 0) {
                 clearInterval(countdownInterval);
+                
+                if (collectedScores.length > 0) {
+                    const sum = collectedScores.reduce((acc, cur) => acc + cur, 0);
+                    finalScore = Math.round(sum / collectedScores.length);
+                } else {
+                    finalScore = 0;
+                }
+
                 showScreen(4, true);
             }
         }, 1000);
@@ -141,6 +154,11 @@ if (currentIndex === 2) {
         const adviceEl = document.getElementById('llm-advice');
         if (adviceEl) adviceEl.innerText = '';
 
+        const scoreNumEl = document.getElementById('report-score');
+        if (scoreNumEl) {
+            scoreNumEl.innerText = finalScore;
+        }
+
         const fadeDelay = useFade ? 800 : 50;
         setTimeout(() => {
             const barTargets = [
@@ -156,7 +174,7 @@ if (currentIndex === 2) {
             });
 
             if (scoreRing) {
-                const targetScore = 85;
+                const targetScore = finalScore;
                 const circumference = 314;
                 const offset = circumference * (1 - targetScore / 100);
                 scoreRing.style.strokeDashoffset = offset;
@@ -200,21 +218,29 @@ document.getElementById('btn-save').addEventListener('click', () => {
 document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
 document.getElementById('btn-restart').addEventListener('click', () => showScreen(1, true));
 
-window.updateFrame = function(base64Image, statusText, isNormal) {
+window.updateFrame = function(base64Image, statusText, isNormal, score) {
     if (currentIndex !== 3) return;
 
     document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
 
     const statusBox = document.getElementById('status-box');
-    statusBox.innerText = statusText;
+    
+    if (typeof score !== 'undefined' && isNormal !== 2) {
+        statusBox.innerText = `${statusText} (점수: ${score}점)`;
+    } else {
+        statusBox.innerText = statusText;
+    }
+    
     statusBox.className = "status-overlay";
 
     if (isNormal === 1) {
         statusBox.classList.add("status-normal");
         isPaused = false;
+        if (typeof score === 'number') collectedScores.push(score);
     } else if (isNormal === 0) {
         statusBox.classList.add("status-warning");
         isPaused = false;
+        if (typeof score === 'number') collectedScores.push(score);
     } else {
         statusBox.classList.add("status-unknown");
         isPaused = true;
@@ -239,4 +265,4 @@ window.addEventListener('keydown', (e) => {
         e.preventDefault();
         if (window.pywebview) window.pywebview.api.close_window();
     }
-})
+});

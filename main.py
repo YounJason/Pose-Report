@@ -67,6 +67,11 @@ class CameraApp:
     def _analyze_pose(self, landmarks, w, h):
         status_list = []
         
+        neck_score = 1
+        trunk_score = 1
+        symmetry_penalty = 0
+        leg_cross_penalty = 0
+        
         required_landmarks = [
             mp_pose.PoseLandmark.NOSE,
             mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
@@ -77,7 +82,7 @@ class CameraApp:
         ]
         
         if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return "인식되지 않음", 2
+            return "인식되지 않음", 2, 0
 
         nose = landmarks[mp_pose.PoseLandmark.NOSE]
         left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
@@ -87,41 +92,58 @@ class CameraApp:
         left_hip_lm = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
         right_hip_lm = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
         
+        ls_x, ls_y = left_shoulder.x * w, left_shoulder.y * h
+        rs_x, rs_y = right_shoulder.x * w, right_shoulder.y * h
+        lh_x, lh_y = left_hip_lm.x * w, left_hip_lm.y * h
+        rh_x, rh_y = right_hip_lm.x * w, right_hip_lm.y * h
+        le_x, le_y = left_ear.x * w, left_ear.y * h
+        re_x, re_y = right_ear.x * w, right_ear.y * h
+
         dy = nose.y - (left_ear.y + right_ear.y) / 2
         dz = ((left_ear.z + right_ear.z) / 2) - nose.z
         neck_angle = 90 - math.degrees(math.atan2(abs(dz), dy)) if dy != 0 else 0
-        if neck_angle > self.TURTLE_NECK_ANGLE_THRESHOLD:
+        
+        if neck_angle <= 10:
+            neck_score = 1
+        elif 10 < neck_angle <= 20:
+            neck_score = 2
+        else:
+            neck_score = 3
             status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
             
+        head_tilt_angle = math.degrees(math.atan2(abs(le_y - re_y), abs(le_x - re_x))) if le_x != re_x else 90.0
+        if head_tilt_angle > self.HEAD_TILT_ANGLE_THRESHOLD:
+            neck_score += 1
+            status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
+
         dy_torso = ((left_hip_lm.y + right_hip_lm.y) / 2) - ((left_shoulder.y + right_shoulder.y) / 2)
         dz_torso = ((left_hip_lm.z + right_hip_lm.z) / 2) - ((left_shoulder.z + right_shoulder.z) / 2)
         torso_angle = math.degrees(math.atan2(abs(dz_torso), dy_torso)) if dy_torso != 0 else 0
-        if torso_angle > self.TORSO_ANGLE_THRESHOLD:
+        
+        if torso_angle <= 5:
+            trunk_score = 1
+        elif 5 < torso_angle <= 20:
+            trunk_score = 2
+        else:
+            trunk_score = 3
             status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
             
-        ls_x, ls_y = left_shoulder.x * w, left_shoulder.y * h
-        rs_x, rs_y = right_shoulder.x * w, right_shoulder.y * h
-        shoulder_angle = math.degrees(math.atan2(abs(ls_y - rs_y), abs(ls_x - rs_x))) if ls_x != rs_x else 90.0
-        if shoulder_angle > self.SHOULDER_ANGLE_THRESHOLD:
-            status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
-        
-        lh_x, lh_y = left_hip_lm.x * w, left_hip_lm.y * h
-        rh_x, rh_y = right_hip_lm.x * w, right_hip_lm.y * h
-        pelvis_angle = math.degrees(math.atan2(abs(lh_y - rh_y), abs(lh_x - rh_x))) if lh_x != rh_x else 90.0
-        if pelvis_angle > self.PELVIS_ANGLE_THRESHOLD:
-            status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
-        
-        le_x, le_y = left_ear.x * w, left_ear.y * h
-        re_x, re_y = right_ear.x * w, right_ear.y * h
-        head_tilt_angle = math.degrees(math.atan2(abs(le_y - re_y), abs(le_x - re_x))) if le_x != re_x else 90.0
-        if head_tilt_angle > self.HEAD_TILT_ANGLE_THRESHOLD:
-            status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
-        
         dx_spine = ((ls_x + rs_x) / 2) - ((lh_x + rh_x) / 2)
         dy_spine = ((lh_y + rh_y) / 2) - ((ls_y + rs_y) / 2)
         spine_lean_angle = math.degrees(math.atan2(abs(dx_spine), dy_spine)) if dy_spine != 0 else 90.0
         if spine_lean_angle > self.SPINE_LEAN_ANGLE_THRESHOLD:
+            trunk_score += 1
             status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
+
+        shoulder_angle = math.degrees(math.atan2(abs(ls_y - rs_y), abs(ls_x - rs_x))) if ls_x != rs_x else 90.0
+        if shoulder_angle > self.SHOULDER_ANGLE_THRESHOLD:
+            symmetry_penalty += 1
+            status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
+        
+        pelvis_angle = math.degrees(math.atan2(abs(lh_y - rh_y), abs(lh_x - rh_x))) if lh_x != rh_x else 90.0
+        if pelvis_angle > self.PELVIS_ANGLE_THRESHOLD:
+            symmetry_penalty += 1
+            status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
         
         left_hip = (int(lh_x), int(lh_y))
         right_hip = (int(rh_x), int(rh_y))
@@ -134,10 +156,17 @@ class CameraApp:
             is_intersect(left_hip, left_knee, right_knee, right_ankle) or
             is_intersect(left_knee, left_ankle, right_hip, right_knee) or
             is_intersect(left_knee, left_ankle, right_knee, right_ankle)):
+            leg_cross_penalty = 2
             status_list.append("다리 꼬기")
         
+        total_risk_score = neck_score + trunk_score + symmetry_penalty + leg_cross_penalty
+        
+        health_score = int(100 - ((total_risk_score - 2) / 10 * 100))
+        health_score = max(0, min(100, health_score))
+        
         status_text = ", ".join(status_list) if status_list else "정상"
-        return status_text, 1 if status_text == "정상" else 0
+        is_normal = 1 if status_text == "정상" else 0
+        return status_text, is_normal, health_score
 
     def start_camera_thread(self):
         while self.running:
@@ -166,17 +195,17 @@ class CameraApp:
             results = pose.process(rgb)
             
             if results.pose_landmarks:
-                status_text, is_normal = self._analyze_pose(results.pose_landmarks.landmark, w, h)
+                status_text, is_normal, score = self._analyze_pose(results.pose_landmarks.landmark, w, h)
                 mp.solutions.drawing_utils.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             else:
-                status_text, is_normal = "인식되지 않음", 2
+                status_text, is_normal, score = "인식되지 않음", 2, 0
 
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             b64_str = base64.b64encode(buffer).decode('utf-8')
             safe_text = status_text.replace("'", "\\'")
             
             try:
-                window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal})")
+                window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score})")
             except:
                 break
                 
