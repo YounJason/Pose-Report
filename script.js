@@ -48,9 +48,16 @@ function showScreen(index, useFade = true) {
     currentIndex = index;
     screens[currentIndex].classList.add('active');
 
-    if (currentIndex === 2) {
-        const randomStr = Math.random().toString(36).substring(2, 9);
-        const qrUrl = `https://pose-report.netlify.app/#${randomStr}`;
+if (currentIndex === 2) {
+        const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+            ? crypto.randomUUID() 
+            : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+
+        const qrUrl = `https://pose-report.netlify.app/#${uuid}`;
 
         try {
             const qrContainer = document.getElementById("qrcode-privacy");
@@ -58,7 +65,7 @@ function showScreen(index, useFade = true) {
             new QRCode(qrContainer, { text: qrUrl, width: 260, height: 260 });
         } catch (qrErr) { }
 
-        const targetUrl = `${SUPABASE_URL}/rest/v1/privacy?id=eq.${randomStr}&select=*`;
+        const targetUrl = `${SUPABASE_URL}/rest/v1/privacy?id=eq.${uuid}&select=*`;
         clearInterval(privacyPollInterval);
 
         privacyPollInterval = setInterval(() => {
