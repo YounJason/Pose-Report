@@ -4,6 +4,10 @@ let countdownInterval = null;
 let privacyPollInterval = null;
 let reportLoadingTimeout = null;
 let typingInterval = null;
+
+let timeLeft = 60;
+let isPaused = false; 
+
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
 screens.forEach((screen, idx) => {
@@ -84,15 +88,17 @@ function showScreen(index, useFade = true) {
     if (currentIndex === 3) {
         if (window.pywebview) window.pywebview.api.toggle_camera(true);
 
-        let timeLeft = 60;
+        timeLeft = 60;
+        isPaused = false;
         const timerEl = document.getElementById('timer');
-        timerEl.innerText = "01:00";
+        timerEl.innerText = "60";
 
+        clearInterval(countdownInterval);
         countdownInterval = setInterval(() => {
+            if (isPaused) return;
+
             timeLeft--;
-            const mins = String(Math.floor(timeLeft / 60)).padStart(2, '0');
-            const secs = String(timeLeft % 60).padStart(2, '0');
-            timerEl.innerText = `${mins}:${secs}`;
+            timerEl.innerText = String(timeLeft).padStart(2, '0');
 
             if (timeLeft <= 0) {
                 clearInterval(countdownInterval);
@@ -195,9 +201,16 @@ window.updateFrame = function(base64Image, statusText, isNormal) {
     statusBox.innerText = statusText;
     statusBox.className = "status-overlay";
 
-    if (isNormal === 1) statusBox.classList.add("status-normal");
-    else if (isNormal === 0) statusBox.classList.add("status-warning");
-    else statusBox.classList.add("status-unknown");
+    if (isNormal === 1) {
+        statusBox.classList.add("status-normal");
+        isPaused = false;
+    } else if (isNormal === 0) {
+        statusBox.classList.add("status-warning");
+        isPaused = false;
+    } else {
+        statusBox.classList.add("status-unknown");
+        isPaused = true;
+    }
 };
 
 window.addEventListener('keydown', (e) => {
