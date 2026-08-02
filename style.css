@@ -441,17 +441,6 @@ p {
     font-size: 1rem;
 }
 
-.print-btn {
-    width: 90%;
-    max-width: 260px;
-    padding: 14px 24px;
-    font-size: 1.2rem;
-    font-weight: 700;
-    background-color: #34a853;
-    border-radius: 30px;
-    margin-top: 4px;
-}
-
 .advice-card {
     grid-column: 3 / 4;
     grid-row: 1 / 3;
