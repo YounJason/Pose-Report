@@ -68,7 +68,7 @@ function showScreen(index, useFade = true) {
             new QRCode(qrContainer, { text: qrUrl, width: 260, height: 260 });
         } catch (qrErr) { }
 
-        const targetUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${uuid}&select=*`;
+        const targetUrl = `${SUPABASE_URL}/rest/v1/main?id=eq.${uuid}&select=*`;
         clearInterval(privacyPollInterval);
 
         privacyPollInterval = setInterval(() => {

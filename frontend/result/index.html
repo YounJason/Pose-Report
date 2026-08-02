@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 자세 분석 결과 리포트</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #1a73e8;
+            --primary-light: #e8f0fe;
+            --text-dark: #202124;
+            --text-muted: #5f6368;
+            --bg-body: #f8f9fa;
+            --bg-card: #ffffff;
+            --status-good: #137333;
+            --status-good-bg: #e6f4ea;
+            --status-warning: #d93025;
+            --status-warning-bg: #fce8e6;
+            --border-color: #e0e0e0;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-dark);
+            line-height: 1.6;
+            padding: 20px 16px 40px 16px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 24px;
+            padding-top: 12px;
+        }
+
+        header .badge {
+            display: inline-block;
+            background-color: var(--primary-light);
+            color: var(--primary);
+            font-size: 0.85rem;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 20px;
+            margin-bottom: 8px;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--text-dark);
+            letter-spacing: -0.5px;
+        }
+
+        header p {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 24px 20px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-dark);
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .score-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 0;
+        }
+
+        .score-circle-wrapper {
+            position: relative;
+            width: 180px;
+            height: 180px;
+        }
+
+        .score-ring {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .ring-bg {
+            fill: none;
+            stroke: var(--primary-light);
+            stroke-width: 10;
+        }
+
+        .ring-progress {
+            fill: none;
+            stroke: var(--primary);
+            stroke-width: 10;
+            stroke-linecap: round;
+            stroke-dasharray: 314;
+            stroke-dashoffset: 47.1;
+            transition: stroke-dashoffset 1.2s ease-in-out;
+        }
+
+        .score-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .score-num {
+            font-size: 3.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .score-total {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .score-summary {
+            margin-top: 16px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--text-dark);
+            text-align: center;
+        }
+
+        .metrics-list {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .metric-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.05rem;
+            font-weight: 600;
+        }
+
+        .metric-value {
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .status-good-text { color: var(--status-good); }
+        .status-warning-text { color: var(--status-warning); }
+
+        .progress-bar-bg {
+            width: 100%;
+            height: 12px;
+            background-color: #f1f3f4;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 1s ease-in-out;
+        }
+
+        .fill-good { background-color: #34a853; }
+        .fill-warning { background-color: #ea4335; }
+
+        .advice-box {
+            background-color: #f8f9fa;
+            border-radius: 14px;
+            padding: 18px;
+            font-size: 1.05rem;
+            font-weight: 400;
+            color: var(--text-dark);
+            line-height: 1.7;
+            border: 1px solid #f1f3f4;
+            white-space: pre-line;
+        }
+
+        .help-text {
+            margin-top: 14px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            text-align: center;
+        }
+
+        .action-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 14px 20px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-align: center;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: #ffffff;
+        }
+
+        .btn-primary:active {
+            background-color: #1557b0;
+        }
+
+        .btn-secondary {
+            background-color: #ffffff;
+            color: var(--text-dark);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:active {
+            background-color: #f1f3f4;
+        }
+
+        footer {
+            margin-top: 32px;
+            text-align: center;
+            font-size: 0.8rem;
+            color: #9aa0a6;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <span class="badge">AI POSE REPORT</span>
+        <h1>자세 분석 리포트</h1>
+        <p id="report-date">측정일시: 불러오는 중...</p>
+    </header>
+
+    <div class="card">
+        <h2 class="card-title">📊 종합 자세 점수</h2>
+        <div class="score-wrapper">
+            <div class="score-circle-wrapper">
+                <svg class="score-ring" viewBox="0 0 120 120">
+                    <circle class="ring-bg" cx="60" cy="60" r="50"></circle>
+                    <circle class="ring-progress" id="score-ring-progress" cx="60" cy="60" r="50"></circle>
+                </svg>
+                <div class="score-text">
+                    <span class="score-num" id="report-score">85</span>
+                    <span class="score-total">/ 100점</span>
+                </div>
+            </div>
+            <div class="score-summary" id="score-summary-text">
+                전반적으로 양호한 자세를 유지하고 계십니다.
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 class="card-title">📏 세부 항목 측정 결과</h2>
+        <div class="metrics-list">
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>거북목 위험도</span>
+                    <span class="metric-value status-good-text" id="val-turtle">양호 (4.2°)</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill fill-good" id="bar-turtle" style="width: 85%;"></div>
+                </div>
+            </div>
+
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>등 · 허리 안정도</span>
+                    <span class="metric-value status-good-text" id="val-torso">안정 (12.0°)</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill fill-good" id="bar-torso" style="width: 80%;"></div>
+                </div>
+            </div>
+
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>어깨 균형</span>
+                    <span class="metric-value status-warning-text" id="val-shoulder">주의 (5.8°)</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill fill-warning" id="bar-shoulder" style="width: 55%;"></div>
+                </div>
+            </div>
+
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>골반 균형</span>
+                    <span class="metric-value status-good-text" id="val-pelvis">정상 (2.1°)</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill fill-good" id="bar-pelvis" style="width: 90%;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 class="card-title">🤖 AI 맞춤 피드백</h2>
+        <div class="advice-box" id="llm-advice">
+            현재 거북목 및 골반 균형은 양호한 상태입니다. 
+
+            다만, 어깨 비대칭 각도가 기준치를 초과하여 주의가 필요합니다. 평소 한쪽으로 가방을 매거나 턱을 괴는 습관이 있는지 확인해 보세요. 
+
+            어깨 균형 회복을 위해 승모근 스트레칭과 견갑골 안정화 운동을 주기적으로 시행해 주시는 것을 권장합니다.
+        </div>
+        <p class="help-text">AI는 실수를 할 수 있습니다. 해당 내용은 전문 의료인의 조언을 대체하지 않습니다.</p>
+    </div>
+
+    <div class="action-group">
+        <button class="btn btn-secondary">리포트 저장</button>
+        <button class="btn btn-primary">리포트 공유하기</button>
+    </div>
+
+    <footer>
+        <p>© 2026 내성고등학교 인공지능과 프로그래밍 동아리. All rights reserved.</p>
+    </footer>
+</body>
+</html>
