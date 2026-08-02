@@ -286,7 +286,6 @@
                     <span class="score-total">/ 100점</span>
                 </div>
             </div>
-            <div class="score-summary" id="score-summary-text">리포트를 불러오는 중...</div>
         </div>
     </div>
 
@@ -352,9 +351,9 @@
 
     <script>
         const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
-        // Supabase REST API 호출을 위한 public anon key
-        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDY1NTM2MDAsImV4cCI6MjAyMjEyOTYwMH0.placeholder"; // *실제 anon key로 교체*
 
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MzA3NTUsImV4cCI6MjEwMDEwNjc1NX0.Uj2gl4nVLrRJPGwxyJv6zmgUOWu3JuRlIVwydn9ygCw"; 
+    
         // 각도 기준값
         const THRESHOLDS = {
             turtle: 10.0,
@@ -382,11 +381,6 @@
             setTimeout(() => {
                 scoreRing.style.strokeDashoffset = offset;
             }, 100);
-
-            let summaryText = "매우 바른 자세를 유지하고 계십니다!";
-            if (score < 60) summaryText = "자세 불균형이 가중되고 있습니다. 교정이 필요합니다.";
-            else if (score < 80) summaryText = "대체로 양호하나 일부 항목 교정이 필요합니다.";
-            document.getElementById('score-summary-text').innerText = summaryText;
 
             // 3. 세부 항목 게이지 및 상태 표현 렌더링
             const renderMetric = (valId, barId, value, threshold, goodTxt, warnTxt) => {
@@ -424,7 +418,7 @@
                 return;
             }
 
-            const targetUrl = `${SUPABASE_URL}/rest/v1/main?id=eq.${uuid}&select=*`;
+            const targetUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${uuid}&select=*`;
 
             try {
                 const response = await fetch(targetUrl, {
