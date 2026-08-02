@@ -191,6 +191,7 @@ document.getElementById('btn-save').addEventListener('click', () => {
 });
 
 document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
+document.getElementById('btn-restart').addEventListener('click', () => showScreen(1, true));
 
 window.updateFrame = function(base64Image, statusText, isNormal) {
     if (currentIndex !== 3) return;
@@ -231,4 +232,4 @@ window.addEventListener('keydown', (e) => {
         e.preventDefault();
         if (window.pywebview) window.pywebview.api.close_window();
     }
-});
+})

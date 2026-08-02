@@ -266,12 +266,18 @@ p {
     gap: 20px;
 }
 
-.report-header h1 {
+h1 {
     font-size: 2.6rem;
     font-weight: 700;
     color: #202124;
     text-align: left;
     margin-bottom: 0;
+}
+
+.report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .report-grid {
