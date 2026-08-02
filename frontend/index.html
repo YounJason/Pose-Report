@@ -217,7 +217,7 @@
         submitBtn.disabled = true;
         submitBtn.innerText = "처리 중...";
 
-        const targetUrl = `${SUPABASE_URL}/rest/v1/privacy`;
+        const targetUrl = `${SUPABASE_URL}/rest/v1/main`;
 
         fetch(targetUrl, {
             method: 'POST',

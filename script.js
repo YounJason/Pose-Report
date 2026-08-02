@@ -8,8 +8,25 @@ let typingInterval = null;
 let timeLeft = 60;
 let isPaused = false; 
 
-let collectedScores = [];
-let finalScore = 0;
+let currentUuid = "";
+
+let collectedMetrics = {
+    scores: [],
+    turtle: [],
+    torso: [],
+    shoulder: [],
+    pelvis: []
+};
+
+let finalReportData = {
+    score: 0,
+    turtle: 0,
+    torso: 0,
+    shoulder: 0,
+    pelvis: 0
+};
+
+let generatedLLMAdvice = "";
 
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
@@ -18,15 +35,9 @@ screens.forEach((screen, idx) => {
     screen.classList.toggle('active', idx === currentIndex);
 });
 
-if (typeof QRCode !== 'undefined') {
-    new QRCode(document.getElementById("qrcode-download"), {
-        text: "example",
-        width: 200,
-        height: 200
-    });
-}
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function showScreen(index, useFade = true) {
+async function showScreen(index, useFade = true) {
     if (index < 0 || index >= screens.length) return;
 
     if (currentIndex === 3) {
@@ -52,7 +63,7 @@ function showScreen(index, useFade = true) {
     screens[currentIndex].classList.add('active');
 
     if (currentIndex === 2) {
-        const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) 
+        currentUuid = (typeof crypto !== 'undefined' && crypto.randomUUID) 
             ? crypto.randomUUID() 
             : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
                 const r = Math.random() * 16 | 0;
@@ -60,7 +71,7 @@ function showScreen(index, useFade = true) {
                 return v.toString(16);
             });
 
-        const qrUrl = `https://pose-report.netlify.app/#${uuid}`;
+        const qrUrl = `https://pose-report.netlify.app/#${currentUuid}`;
 
         try {
             const qrContainer = document.getElementById("qrcode-privacy");
@@ -68,7 +79,7 @@ function showScreen(index, useFade = true) {
             new QRCode(qrContainer, { text: qrUrl, width: 260, height: 260 });
         } catch (qrErr) { }
 
-        const targetUrl = `${SUPABASE_URL}/rest/v1/main?id=eq.${uuid}&select=*`;
+        const targetUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${currentUuid}&select=*`;
         clearInterval(privacyPollInterval);
 
         privacyPollInterval = setInterval(() => {
@@ -98,7 +109,7 @@ function showScreen(index, useFade = true) {
     if (currentIndex === 3) {
         if (window.pywebview) window.pywebview.api.toggle_camera(true);
 
-        collectedScores = [];
+        collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [] };
 
         timeLeft = 60;
         isPaused = false;
@@ -115,12 +126,14 @@ function showScreen(index, useFade = true) {
             if (timeLeft <= 0) {
                 clearInterval(countdownInterval);
                 
-                if (collectedScores.length > 0) {
-                    const sum = collectedScores.reduce((acc, cur) => acc + cur, 0);
-                    finalScore = Math.round(sum / collectedScores.length);
-                } else {
-                    finalScore = 0;
-                }
+                const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                finalReportData = {
+                    score: Math.round(calcAvg(collectedMetrics.scores)),
+                    turtle: parseFloat(calcAvg(collectedMetrics.turtle).toFixed(1)),
+                    torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
+                    shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
+                    pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1))
+                };
 
                 showScreen(4, true);
             }
@@ -129,24 +142,74 @@ function showScreen(index, useFade = true) {
 
     if (currentIndex === 4) {
         const helptext = document.querySelector('.help-text');
-        const messages = [
-            "측정 결과를 분석하는 중...",
-            "LLM으로 리포트를 생성하는 중...",
-            "리포트 생성을 마무리 하는 중..."
-        ];
-        let msgIndex = 0;
-        const displayMessage = () => {
-            if (msgIndex < messages.length) {
-                helptext.innerText = messages[msgIndex];
-                msgIndex++;
-                setTimeout(displayMessage, 1000);
+        
+        (async () => {
+            helptext.innerText = "리포트를 생성하는 중...";
+            try {
+                if (window.pywebview?.api?.generate_llm_advice) {
+                    generatedLLMAdvice = await window.pywebview.api.generate_llm_advice(finalReportData);
+                } else {
+                    generatedLLMAdvice = "백엔드 API 연결 실패로 인해 AI 피드백을 불러올 수 없습니다.";
+                }
+            } catch (e) {
+                generatedLLMAdvice = "AI 피드백을 생성하는 중 오류가 발생했습니다.";
             }
-        };
-        displayMessage();
-        reportLoadingTimeout = setTimeout(() => showScreen(5, true), 3000);
+
+            await delay(500);
+
+            helptext.innerText = "리포트를 업로드 하는 중...";
+            try {
+                if (window.pywebview?.api?.get_supabase_key && currentUuid) {
+                    const anonKey = await window.pywebview.api.get_supabase_key();
+                    const updateUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${currentUuid}`;
+                    
+                    const payload = {
+                        result: {
+                            metrics: finalReportData,
+                            advice: generatedLLMAdvice
+                        }
+                    };
+
+                    await fetch(updateUrl, {
+                        method: 'PATCH',
+                        headers: {
+                            'apikey': anonKey,
+                            'Authorization': `Bearer ${anonKey}`,
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                }
+            } catch (err) {
+                console.error(err);
+            }
+
+            await delay(500);
+
+            helptext.innerText = "마무리하는 중...";
+            await delay(500);
+
+            showScreen(5, true);
+        })();
     }
 
     if (currentIndex === 5) {
+        try {
+            const qrDownloadContainer = document.getElementById("qrcode-download");
+            if (qrDownloadContainer) {
+                qrDownloadContainer.innerHTML = "";
+                const resultQrUrl = `https://pose-report.netlify.app/result/#${currentUuid}`;
+                new QRCode(qrDownloadContainer, {
+                    text: resultQrUrl,
+                    width: 200,
+                    height: 200
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+
         document.querySelectorAll('.progress-bar-fill').forEach(bar => bar.style.width = '0%');
         const scoreRing = document.getElementById('score-ring-progress');
         if (scoreRing) scoreRing.style.strokeDashoffset = '314';
@@ -156,31 +219,52 @@ function showScreen(index, useFade = true) {
 
         const scoreNumEl = document.getElementById('report-score');
         if (scoreNumEl) {
-            scoreNumEl.innerText = finalScore;
+            scoreNumEl.innerText = finalReportData.score;
         }
+
+        const cfgTurtle = parseFloat(document.getElementById('cfg-turtle').value) || 10.0;
+        const cfgTorso = parseFloat(document.getElementById('cfg-torso').value) || 20.0;
+        const cfgShoulder = parseFloat(document.getElementById('cfg-shoulder').value) || 5.0;
+        const cfgPelvis = parseFloat(document.getElementById('cfg-pelvis').value) || 4.0;
+
+        const setMetricUI = (valId, barId, value, threshold, goodText, warnText) => {
+            const valEl = document.getElementById(valId);
+            const isGood = value <= threshold;
+            if (valEl) {
+                valEl.innerText = `${isGood ? goodText : warnText} (${value}°)`;
+                valEl.className = `metric-value ${isGood ? 'status-good' : 'status-warning'}`;
+            }
+
+            const barRatio = Math.max(10, Math.min(100, Math.round(100 - (value / (threshold * 2)) * 100)));
+            const barEl = document.getElementById(barId);
+            if (barEl) {
+                barEl.className = `progress-bar-fill ${isGood ? 'fill-good' : 'fill-warning'}`;
+                return { el: barEl, width: barRatio + '%' };
+            }
+            return null;
+        };
+
+        const barTargets = [
+            setMetricUI('val-turtle', 'bar-turtle', finalReportData.turtle, cfgTurtle, '양호', '위험'),
+            setMetricUI('val-torso', 'bar-torso', finalReportData.torso, cfgTorso, '안정', '위험'),
+            setMetricUI('val-shoulder', 'bar-shoulder', finalReportData.shoulder, cfgShoulder, '정상', '주의'),
+            setMetricUI('val-pelvis', 'bar-pelvis', finalReportData.pelvis, cfgPelvis, '정상', '주의')
+        ];
 
         const fadeDelay = useFade ? 800 : 50;
         setTimeout(() => {
-            const barTargets = [
-                { id: 'bar-turtle', targetWidth: '85%' },
-                { id: 'bar-torso', targetWidth: '80%' },
-                { id: 'bar-shoulder', targetWidth: '55%' },
-                { id: 'bar-pelvis', targetWidth: '90%' }
-            ];
-
             barTargets.forEach(item => {
-                const el = document.getElementById(item.id);
-                if (el) el.style.width = item.targetWidth;
+                if (item && item.el) item.el.style.width = item.width;
             });
 
             if (scoreRing) {
-                const targetScore = finalScore;
+                const targetScore = finalReportData.score;
                 const circumference = 314;
                 const offset = circumference * (1 - targetScore / 100);
                 scoreRing.style.strokeDashoffset = offset;
             }
 
-            const Advice = `텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트텍스트`;
+            const Advice = generatedLLMAdvice;
             const container = document.getElementById('llm-advice');
             if (container) {
                 container.innerText = '';
@@ -194,7 +278,7 @@ function showScreen(index, useFade = true) {
                     } else {
                         clearInterval(typingInterval);
                     }
-                }, 10);
+                }, 15);
             }
         }, fadeDelay);
     }
@@ -218,7 +302,7 @@ document.getElementById('btn-save').addEventListener('click', () => {
 document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
 document.getElementById('btn-restart').addEventListener('click', () => showScreen(1, true));
 
-window.updateFrame = function(base64Image, statusText, isNormal, score) {
+window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng) {
     if (currentIndex !== 3) return;
 
     document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
@@ -236,11 +320,23 @@ window.updateFrame = function(base64Image, statusText, isNormal, score) {
     if (isNormal === 1) {
         statusBox.classList.add("status-normal");
         isPaused = false;
-        if (typeof score === 'number') collectedScores.push(score);
+        if (typeof score === 'number') {
+            collectedMetrics.scores.push(score);
+            collectedMetrics.turtle.push(turtleAng || 0);
+            collectedMetrics.torso.push(torsoAng || 0);
+            collectedMetrics.shoulder.push(shoulderAng || 0);
+            collectedMetrics.pelvis.push(pelvisAng || 0);
+        }
     } else if (isNormal === 0) {
         statusBox.classList.add("status-warning");
         isPaused = false;
-        if (typeof score === 'number') collectedScores.push(score);
+        if (typeof score === 'number') {
+            collectedMetrics.scores.push(score);
+            collectedMetrics.turtle.push(turtleAng || 0);
+            collectedMetrics.torso.push(torsoAng || 0);
+            collectedMetrics.shoulder.push(shoulderAng || 0);
+            collectedMetrics.pelvis.push(pelvisAng || 0);
+        }
     } else {
         statusBox.classList.add("status-unknown");
         isPaused = true;

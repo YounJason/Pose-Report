@@ -119,7 +119,7 @@
             stroke-width: 10;
             stroke-linecap: round;
             stroke-dasharray: 314;
-            stroke-dashoffset: 47.1;
+            stroke-dashoffset: 314;
             transition: stroke-dashoffset 1.2s ease-in-out;
         }
 
@@ -282,13 +282,11 @@
                     <circle class="ring-progress" id="score-ring-progress" cx="60" cy="60" r="50"></circle>
                 </svg>
                 <div class="score-text">
-                    <span class="score-num" id="report-score">85</span>
+                    <span class="score-num" id="report-score">-</span>
                     <span class="score-total">/ 100점</span>
                 </div>
             </div>
-            <div class="score-summary" id="score-summary-text">
-                전반적으로 양호한 자세를 유지하고 계십니다.
-            </div>
+            <div class="score-summary" id="score-summary-text">리포트를 불러오는 중...</div>
         </div>
     </div>
 
@@ -298,40 +296,40 @@
             <div class="metric-item">
                 <div class="metric-label">
                     <span>거북목 위험도</span>
-                    <span class="metric-value status-good-text" id="val-turtle">양호 (4.2°)</span>
+                    <span class="metric-value" id="val-turtle">-</span>
                 </div>
                 <div class="progress-bar-bg">
-                    <div class="progress-bar-fill fill-good" id="bar-turtle" style="width: 85%;"></div>
+                    <div class="progress-bar-fill" id="bar-turtle" style="width: 0;"></div>
                 </div>
             </div>
 
             <div class="metric-item">
                 <div class="metric-label">
                     <span>등 · 허리 안정도</span>
-                    <span class="metric-value status-good-text" id="val-torso">안정 (12.0°)</span>
+                    <span class="metric-value" id="val-torso">-</span>
                 </div>
                 <div class="progress-bar-bg">
-                    <div class="progress-bar-fill fill-good" id="bar-torso" style="width: 80%;"></div>
+                    <div class="progress-bar-fill" id="bar-torso" style="width: 0;"></div>
                 </div>
             </div>
 
             <div class="metric-item">
                 <div class="metric-label">
                     <span>어깨 균형</span>
-                    <span class="metric-value status-warning-text" id="val-shoulder">주의 (5.8°)</span>
+                    <span class="metric-value" id="val-shoulder">-</span>
                 </div>
                 <div class="progress-bar-bg">
-                    <div class="progress-bar-fill fill-warning" id="bar-shoulder" style="width: 55%;"></div>
+                    <div class="progress-bar-fill" id="bar-shoulder" style="width: 0;"></div>
                 </div>
             </div>
 
             <div class="metric-item">
                 <div class="metric-label">
                     <span>골반 균형</span>
-                    <span class="metric-value status-good-text" id="val-pelvis">정상 (2.1°)</span>
+                    <span class="metric-value" id="val-pelvis">-</span>
                 </div>
                 <div class="progress-bar-bg">
-                    <div class="progress-bar-fill fill-good" id="bar-pelvis" style="width: 90%;"></div>
+                    <div class="progress-bar-fill" id="bar-pelvis" style="width: 0;"></div>
                 </div>
             </div>
         </div>
@@ -339,23 +337,141 @@
 
     <div class="card">
         <h2 class="card-title">🤖 AI 맞춤 피드백</h2>
-        <div class="advice-box" id="llm-advice">
-            현재 거북목 및 골반 균형은 양호한 상태입니다. 
-
-            다만, 어깨 비대칭 각도가 기준치를 초과하여 주의가 필요합니다. 평소 한쪽으로 가방을 매거나 턱을 괴는 습관이 있는지 확인해 보세요. 
-
-            어깨 균형 회복을 위해 승모근 스트레칭과 견갑골 안정화 운동을 주기적으로 시행해 주시는 것을 권장합니다.
-        </div>
-        <p class="help-text">AI는 실수를 할 수 있습니다. 해당 내용은 전문 의료인의 조언을 대체하지 않습니다.</p>
+        <div class="advice-box" id="llm-advice">분석 결과를 불러오는 중입니다...</div>
+        <p class="help-text">AI 피드백은 참고용으로 사용하시기 바랍니다.</p>
     </div>
 
     <div class="action-group">
-        <button class="btn btn-secondary">리포트 저장</button>
-        <button class="btn btn-primary">리포트 공유하기</button>
+        <button class="btn btn-secondary" id="btn-save-report">리포트 저장</button>
+        <button class="btn btn-primary" id="btn-share-report">리포트 공유하기</button>
     </div>
 
     <footer>
         <p>© 2026 내성고등학교 인공지능과 프로그래밍 동아리. All rights reserved.</p>
     </footer>
+
+    <script>
+        const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
+        // Supabase REST API 호출을 위한 public anon key
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDY1NTM2MDAsImV4cCI6MjAyMjEyOTYwMH0.placeholder"; // *실제 anon key로 교체*
+
+        // 각도 기준값
+        const THRESHOLDS = {
+            turtle: 10.0,
+            torso: 20.0,
+            shoulder: 5.0,
+            pelvis: 4.0
+        };
+
+        // UI 데이터 렌더링 함수
+        function renderReport(data) {
+            const metrics = data.result?.metrics || {};
+            const advice = data.result?.advice || "등록된 피드백이 없습니다.";
+            const createdAt = data.created_at ? new Date(data.created_at).toLocaleString('ko-KR') : new Date().toLocaleString('ko-KR');
+
+            // 1. 측정일시
+            document.getElementById('report-date').innerText = `측정일시: ${createdAt}`;
+
+            // 2. 점수 애니메이션 및 요약
+            const score = metrics.score || 0;
+            document.getElementById('report-score').innerText = score;
+            
+            const scoreRing = document.getElementById('score-ring-progress');
+            const circumference = 314;
+            const offset = circumference * (1 - score / 100);
+            setTimeout(() => {
+                scoreRing.style.strokeDashoffset = offset;
+            }, 100);
+
+            let summaryText = "매우 바른 자세를 유지하고 계십니다!";
+            if (score < 60) summaryText = "자세 불균형이 가중되고 있습니다. 교정이 필요합니다.";
+            else if (score < 80) summaryText = "대체로 양호하나 일부 항목 교정이 필요합니다.";
+            document.getElementById('score-summary-text').innerText = summaryText;
+
+            // 3. 세부 항목 게이지 및 상태 표현 렌더링
+            const renderMetric = (valId, barId, value, threshold, goodTxt, warnTxt) => {
+                const valEl = document.getElementById(valId);
+                const barEl = document.getElementById(barId);
+                const isGood = value <= threshold;
+
+                valEl.innerText = `${isGood ? goodTxt : warnTxt} (${value}°)`;
+                valEl.className = `metric-value ${isGood ? 'status-good-text' : 'status-warning-text'}`;
+
+                const barRatio = Math.max(10, Math.min(100, Math.round(100 - (value / (threshold * 2)) * 100)));
+                barEl.className = `progress-bar-fill ${isGood ? 'fill-good' : 'fill-warning'}`;
+                
+                setTimeout(() => {
+                    barEl.style.width = `${barRatio}%`;
+                }, 100);
+            };
+
+            renderMetric('val-turtle', 'bar-turtle', metrics.turtle || 0, THRESHOLDS.turtle, '양호', '위험');
+            renderMetric('val-torso', 'bar-torso', metrics.torso || 0, THRESHOLDS.torso, '안정', '위험');
+            renderMetric('val-shoulder', 'bar-shoulder', metrics.shoulder || 0, THRESHOLDS.shoulder, '정상', '주의');
+            renderMetric('val-pelvis', 'bar-pelvis', metrics.pelvis || 0, THRESHOLDS.pelvis, '정상', '주의');
+
+            // 4. AI 피드백
+            document.getElementById('llm-advice').innerText = advice;
+        }
+
+        // Supabase DB 데이터 수신 로직
+        async function fetchReportData() {
+            // URL Hash에서 UUID 추출 (`#uuid`)
+            const uuid = window.location.hash.replace('#', '').trim();
+            if (!uuid) {
+                document.getElementById('score-summary-text').innerText = "잘못된 접근 경로입니다.";
+                document.getElementById('llm-advice').innerText = "유효한 리포트 ID가 존재하지 않습니다.";
+                return;
+            }
+
+            const targetUrl = `${SUPABASE_URL}/rest/v1/main?id=eq.${uuid}&select=*`;
+
+            try {
+                const response = await fetch(targetUrl, {
+                    method: 'GET',
+                    headers: {
+                        'apikey': SUPABASE_ANON_KEY,
+                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) throw new Error("네트워크 응답 오류");
+
+                const data = await response.json();
+                if (Array.isArray(data) && data.length > 0) {
+                    renderReport(data[0]);
+                } else {
+                    document.getElementById('score-summary-text').innerText = "리포트를 찾을 수 없습니다.";
+                    document.getElementById('llm-advice').innerText = "데이터가 존재하지 않거나 생성되지 않았습니다.";
+                }
+            } catch (err) {
+                console.error("Data fetch error:", err);
+                document.getElementById('score-summary-text').innerText = "데이터 로딩 실패";
+                document.getElementById('llm-advice').innerText = "서버 데이터를 불러오는 중 오류가 발생했습니다.";
+            }
+        }
+
+        // 공유하기 & 저장 버튼 이벤트
+        document.getElementById('btn-share-report').addEventListener('click', () => {
+            if (navigator.share) {
+                navigator.share({
+                    title: 'AI 자세 분석 리포트',
+                    text: '나의 자세 분석 측정 결과를 확인해보세요!',
+                    url: window.location.href,
+                }).catch(() => {});
+            } else {
+                navigator.clipboard.writeText(window.location.href);
+                alert("리포트 링크가 클립보드에 복사되었습니다.");
+            }
+        });
+
+        document.getElementById('btn-save-report').addEventListener('click', () => {
+            window.print();
+        });
+
+        // 초기화 실행
+        window.addEventListener('DOMContentLoaded', fetchReportData);
+    </script>
 </body>
 </html>

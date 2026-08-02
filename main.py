@@ -6,6 +6,7 @@ import base64
 import time
 import math
 import os
+import requests
 from dotenv import load_dotenv
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +47,7 @@ class CameraApp:
         
         raw_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 
     def get_supabase_key(self):
         return self.supabase_anon_key
@@ -82,7 +84,7 @@ class CameraApp:
         ]
         
         if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return "인식되지 않음", 2, 0
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
 
         nose = landmarks[mp_pose.PoseLandmark.NOSE]
         left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
@@ -166,7 +168,44 @@ class CameraApp:
         
         status_text = ", ".join(status_list) if status_list else "정상"
         is_normal = 1 if status_text == "정상" else 0
-        return status_text, is_normal, health_score
+        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle)
+
+    def generate_llm_advice(self, metrics):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={self.gemini_api_key}"
+        
+        prompt = f"""
+        당신은 자세 교정 전문 AI 트레이너입니다. 
+        사용자의 60초간 측정한 자세 데이터는 다음과 같습니다:
+
+        - 종합 자세 점수: {metrics.get('score')}점 / 100점
+        - 거북목 평균 각도: {metrics.get('turtle')}° (기준치: {self.TURTLE_NECK_ANGLE_THRESHOLD}° 이하)
+        - 등/허리 굽음 평균 각도: {metrics.get('torso')}° (기준치: {self.TORSO_ANGLE_THRESHOLD}° 이하)
+        - 어깨 비대칭 평균 각도: {metrics.get('shoulder')}° (기준치: {self.SHOULDER_ANGLE_THRESHOLD}° 이하)
+        - 골반 비대칭 평균 각도: {metrics.get('pelvis')}° (기준치: {self.PELVIS_ANGLE_THRESHOLD}° 이하)
+
+        위 자세 측정 결과를 종합적으로 분석하여 사용자의 자세 습관과 문제점을 지적해 주세요.
+        답변은 읽기 쉽게 단락을 나누어 한국어로 작성해 주세요.
+        마크다운을 사용하지 말고 줄글로 작성하세요.
+        """
+
+        headers = {'Content-Type': 'application/json'}
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=12)
+            if res.status_code == 200:
+                data = res.json()
+                return data['candidates'][0]['content']['parts'][0]['text']
+            else:
+                print(f"Error: {res.text}")
+                return f"피드백 생성 중 오류가 발생했습니다: {res.text}"
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            return f"피드백 생성 중 오류가 발생했습니다: {str(e)}"
 
     def start_camera_thread(self):
         while self.running:
@@ -195,17 +234,17 @@ class CameraApp:
             results = pose.process(rgb)
             
             if results.pose_landmarks:
-                status_text, is_normal, score = self._analyze_pose(results.pose_landmarks.landmark, w, h)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = self._analyze_pose(results.pose_landmarks.landmark, w, h)
                 mp.solutions.drawing_utils.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             else:
-                status_text, is_normal, score = "인식되지 않음", 2, 0
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
 
             _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             b64_str = base64.b64encode(buffer).decode('utf-8')
             safe_text = status_text.replace("'", "\\'")
             
             try:
-                window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score})")
+                window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, {turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f})")
             except:
                 break
                 
