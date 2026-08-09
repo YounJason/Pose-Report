@@ -2,255 +2,470 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>개인정보 수집 및 이용 동의</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 자세 분석 결과 리포트</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --primary: #1a73e8;
+            --primary-light: #e8f0fe;
+            --text-dark: #202124;
+            --text-muted: #5f6368;
+            --bg-body: #f8f9fa;
+            --bg-card: #ffffff;
+            --status-good: #137333;
+            --status-good-bg: #e6f4ea;
+            --status-warning: #d93025;
+            --status-warning-bg: #fce8e6;
+            --border-color: #e0e0e0;
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            font-family: 'Noto Sans KR', sans-serif;
-            -webkit-tap-highlight-color: transparent;
+            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
         body {
-            background-color: #f8f9fa;
-            color: #202124;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
+            background-color: var(--bg-body);
+            color: var(--text-dark);
+            line-height: 1.6;
+            padding: 20px 16px 40px 16px;
+            max-width: 600px;
+            margin: 0 auto;
         }
 
-        .container {
-            background: #ffffff;
-            width: 100%;
-            max-width: 480px;
-            border-radius: 16px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-            padding: 24px;
+        header {
+            text-align: center;
+            margin-bottom: 24px;
+            padding-top: 12px;
+        }
+
+        header .badge {
+            display: inline-block;
+            background-color: var(--primary-light);
+            color: var(--primary);
+            font-size: 0.85rem;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 20px;
+            margin-bottom: 8px;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            color: var(--text-dark);
+            letter-spacing: -0.5px;
+        }
+
+        header p {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 20px;
+            padding: 24px 20px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-dark);
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .score-wrapper {
             display: flex;
             flex-direction: column;
-            gap: 20px;
-        }
-
-        .header {
-            text-align: center;
-            border-bottom: 1px solid #f1f3f4;
-            padding-bottom: 16px;
-        }
-
-        .header h1 {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #1a73e8;
-        }
-
-        .header p {
-            font-size: 0.9rem;
-            color: #5f6368;
-            margin-top: 6px;
-        }
-
-        .content-box {
-            background-color: #f8f9fa;
-            border: 1px solid #dadce0;
-            border-radius: 8px;
-            padding: 16px;
-            height: 240px;
-            overflow-y: auto;
-            font-size: 0.9rem;
-            line-height: 1.6;
-            color: #3c4043;
-        }
-
-        .content-box h3 {
-            font-size: 0.95rem;
-            font-weight: 700;
-            margin-bottom: 8px;
-            color: #202124;
-        }
-
-        .content-box ul {
-            margin-left: 20px;
-            margin-bottom: 12px;
-        }
-
-        .checkbox-container {
-            display: flex;
             align-items: center;
-            gap: 10px;
-            cursor: pointer;
-            padding: 8px 4px;
+            justify-content: center;
+            padding: 10px 0;
         }
 
-        .checkbox-container input {
-            width: 20px;
-            height: 20px;
-            accent-color: #1a73e8;
-            cursor: pointer;
+        .score-circle-wrapper {
+            position: relative;
+            width: 180px;
+            height: 180px;
         }
 
-        .checkbox-container span {
+        .score-ring {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .ring-bg {
+            fill: none;
+            stroke: var(--primary-light);
+            stroke-width: 10;
+        }
+
+        .ring-progress {
+            fill: none;
+            stroke: var(--primary);
+            stroke-width: 10;
+            stroke-linecap: round;
+            stroke-dasharray: 314;
+            stroke-dashoffset: 314;
+            transition: stroke-dashoffset 1.2s ease-in-out;
+        }
+
+        .score-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .score-num {
+            font-size: 3.5rem;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1;
+        }
+
+        .score-total {
             font-size: 1rem;
-            font-weight: 500;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .score-summary {
+            margin-top: 16px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--text-dark);
+            text-align: center;
+        }
+
+        .metrics-list {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .metric-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1.05rem;
+            font-weight: 600;
+        }
+
+        .metric-value {
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .status-good-text { color: var(--status-good); }
+        .status-warning-text { color: var(--status-warning); }
+
+        .progress-bar-bg {
+            width: 100%;
+            height: 12px;
+            background-color: #f1f3f4;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            transition: width 1s ease-in-out;
+        }
+
+        .fill-good { background-color: #34a853; }
+        .fill-warning { background-color: #ea4335; }
+
+        .advice-box {
+            background-color: #f8f9fa;
+            border-radius: 14px;
+            padding: 18px;
+            font-size: 1.05rem;
+            font-weight: 400;
+            color: var(--text-dark);
+            line-height: 1.7;
+            border: 1px solid #f1f3f4;
+            white-space: pre-line;
+        }
+
+        .help-text {
+            margin-top: 14px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            text-align: center;
+        }
+
+        .action-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
         }
 
         .btn {
-            width: 100%;
-            background-color: #dadce0;
-            color: #5f6368;
+            flex: 1;
+            padding: 14px 20px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-align: center;
             border: none;
-            border-radius: 24px;
-            padding: 14px;
-            font-size: 1.1rem;
-            font-weight: 700;
-            cursor: not-allowed;
-            transition: all 0.2s;
-        }
-
-        .btn.active {
-            background-color: #1a73e8;
-            color: #ffffff;
             cursor: pointer;
-            box-shadow: 0 2px 4px rgba(26,115,232,0.2);
+            text-decoration: none;
+            transition: background-color 0.2s, transform 0.1s;
         }
 
-        .btn.active:active {
+        .btn-primary {
+            background-color: var(--primary);
+            color: #ffffff;
+        }
+
+        .btn-primary:active {
             background-color: #1557b0;
         }
 
-        .status-screen {
-            display: none;
+        .btn-secondary {
+            background-color: #ffffff;
+            color: var(--text-dark);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:active {
+            background-color: #f1f3f4;
+        }
+
+        footer {
+            margin-top: 32px;
             text-align: center;
-            padding: 40px 20px;
-            flex-direction: column;
-            align-items: center;
-            gap: 16px;
-        }
-
-        .status-screen.active {
-            display: flex;
-        }
-
-        .status-icon {
-            font-size: 3.5rem;
-            margin-bottom: 8px;
-        }
-
-        .status-title {
-            font-size: 1.4rem;
-            font-weight: 700;
-        }
-
-        .status-desc {
-            font-size: 1rem;
-            color: #5f6368;
-            line-height: 1.5;
+            font-size: 0.8rem;
+            color: #9aa0a6;
         }
     </style>
 </head>
 <body>
 
-<div class="container" id="form-container">
-    <div class="header">
-        <h1>개인정보 동의</h1>
-        <p>아래 약관에 동의해 주세요.</p>
+    <header>
+        <span class="badge">AI POSE REPORT</span>
+        <h1>자세 분석 리포트</h1>
+        <p id="report-date">측정일시: 불러오는 중...</p>
+    </header>
+
+    <div class="card">
+        <h2 class="card-title">📊 종합 자세 점수</h2>
+        <div class="score-wrapper">
+            <div class="score-circle-wrapper">
+                <svg class="score-ring" viewBox="0 0 120 120">
+                    <circle class="ring-bg" cx="60" cy="60" r="50"></circle>
+                    <circle class="ring-progress" id="score-ring-progress" cx="60" cy="60" r="50"></circle>
+                </svg>
+                <div class="score-text">
+                    <span class="score-num" id="report-score">-</span>
+                    <span class="score-total">/ 100점</span>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="content-box">
-        <h3>제목</h3>
-        <p>내용</p>
+    <div class="card">
+        <h2 class="card-title">📏 세부 항목 측정 결과</h2>
+        <div class="metrics-list">
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>거북목 위험도</span>
+                    <span class="metric-value" id="val-turtle">-</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-turtle" style="width: 0;"></div>
+                </div>
+            </div>
+
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>등 · 허리 안정도</span>
+                    <span class="metric-value" id="val-torso">-</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-torso" style="width: 0;"></div>
+                </div>
+            </div>
+
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>어깨 균형</span>
+                    <span class="metric-value" id="val-shoulder">-</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-shoulder" style="width: 0;"></div>
+                </div>
+            </div>
+
+            <div class="metric-item">
+                <div class="metric-label">
+                    <span>골반 균형</span>
+                    <span class="metric-value" id="val-pelvis">-</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="bar-pelvis" style="width: 0;"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <label class="checkbox-container">
-        <input type="checkbox" id="agree-checkbox">
-        <span>위 내용을 확인했으며 동의합니다.</span>
-    </label>
+    <div class="card">
+        <h2 class="card-title">🤖 AI 맞춤 피드백</h2>
+        <div class="advice-box" id="llm-advice">분석 결과를 불러오는 중입니다...</div>
+        <p class="help-text">AI 피드백은 참고용으로 사용하시기 바랍니다.</p>
+    </div>
 
-    <button class="btn" id="submit-btn" disabled>동의하고 시작하기</button>
-</div>
+    <div class="action-group">
+        <button class="btn btn-secondary" id="btn-save-report">리포트 저장</button>
+        <button class="btn btn-primary" id="btn-share-report">리포트 공유하기</button>
+    </div>
 
-<div class="container status-screen" id="status-container">
-    <div class="status-icon" id="status-icon">⏳</div>
-    <div class="status-title" id="status-title">연결 확인 중</div>
-    <div class="status-desc" id="status-desc">잠시만 기다려 주세요...</div>
-</div>
+    <footer>
+        <p>© 2026 내성고등학교 인공지능과 프로그래밍 동아리. All rights reserved.</p>
+    </footer>
 
-<script>
-    const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
+    <script>
+        const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
+
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MzA3NTUsImV4cCI6MjEwMDEwNjc1NX0.Uj2gl4nVLrRJPGwxyJv6zmgUOWu3JuRlIVwydn9ygCw"; 
     
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MzA3NTUsImV4cCI6MjEwMDEwNjc1NX0.Uj2gl4nVLrRJPGwxyJv6zmgUOWu3JuRlIVwydn9ygCw"; 
-    
-    const requestId = window.location.hash.substring(1);
-    
-    const formContainer = document.getElementById('form-container');
-    const statusContainer = document.getElementById('status-container');
-    const checkbox = document.getElementById('agree-checkbox');
-    const submitBtn = document.getElementById('submit-btn');
-    
-    const statusIcon = document.getElementById('status-icon');
-    const statusTitle = document.getElementById('status-title');
-    const statusDesc = document.getElementById('status-desc');
+        // 각도 기준값
+        const THRESHOLDS = {
+            turtle: 10.0,
+            torso: 20.0,
+            shoulder: 5.0,
+            pelvis: 4.0
+        };
 
-    if (!requestId) {
-        showStatus('❌', '잘못된 접근', 'QR 코드를 통해 정상적으로 접속해 주세요.');
-    }
+        // UI 데이터 렌더링 함수
+        function renderReport(data) {
+            const metrics = data.result?.metrics || {};
+            const advice = data.result?.advice || "등록된 피드백이 없습니다.";
+            const createdAt = data.created_at ? new Date(data.created_at).toLocaleString('ko-KR') : new Date().toLocaleString('ko-KR');
 
-    checkbox.addEventListener('change', () => {
-        if (checkbox.checked && requestId) {
-            submitBtn.disabled = false;
-            submitBtn.classList.add('active');
-        } else {
-            submitBtn.disabled = true;
-            submitBtn.classList.remove('active');
+            // 1. 측정일시
+            document.getElementById('report-date').innerText = `측정일시: ${createdAt}`;
+
+            // 2. 점수 애니메이션 및 요약
+            const score = metrics.score || 0;
+            document.getElementById('report-score').innerText = score;
+            
+            const scoreRing = document.getElementById('score-ring-progress');
+            const circumference = 314;
+            const offset = circumference * (1 - score / 100);
+            setTimeout(() => {
+                scoreRing.style.strokeDashoffset = offset;
+            }, 100);
+
+            // 3. 세부 항목 게이지 및 상태 표현 렌더링
+            const renderMetric = (valId, barId, value, threshold, goodTxt, warnTxt) => {
+                const valEl = document.getElementById(valId);
+                const barEl = document.getElementById(barId);
+                const isGood = value <= threshold;
+
+                valEl.innerText = `${isGood ? goodTxt : warnTxt} (${value}°)`;
+                valEl.className = `metric-value ${isGood ? 'status-good-text' : 'status-warning-text'}`;
+
+                const barRatio = Math.max(10, Math.min(100, Math.round(100 - (value / (threshold * 2)) * 100)));
+                barEl.className = `progress-bar-fill ${isGood ? 'fill-good' : 'fill-warning'}`;
+                
+                setTimeout(() => {
+                    barEl.style.width = `${barRatio}%`;
+                }, 100);
+            };
+
+            renderMetric('val-turtle', 'bar-turtle', metrics.turtle || 0, THRESHOLDS.turtle, '양호', '위험');
+            renderMetric('val-torso', 'bar-torso', metrics.torso || 0, THRESHOLDS.torso, '안정', '위험');
+            renderMetric('val-shoulder', 'bar-shoulder', metrics.shoulder || 0, THRESHOLDS.shoulder, '정상', '주의');
+            renderMetric('val-pelvis', 'bar-pelvis', metrics.pelvis || 0, THRESHOLDS.pelvis, '정상', '주의');
+
+            // 4. AI 피드백
+            document.getElementById('llm-advice').innerText = advice;
         }
-    });
 
-    submitBtn.addEventListener('click', () => {
-        if (!checkbox.checked || !requestId) return;
-
-        submitBtn.disabled = true;
-        submitBtn.innerText = "처리 중...";
-
-        const targetUrl = `${SUPABASE_URL}/rest/v1/main`;
-
-        fetch(targetUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-                'Prefer': 'return=representation'
-            },
-            body: JSON.stringify({
-                uuid: requestId,
-                created_at: new Date().toISOString()
-            })
-        })
-        .then(response => {
-            if (response.ok || response.status === 201 || response.status === 200) {
-                showStatus('✅', '완료!', '화면을 확인해 주세요.');
-            } else {
-                showStatus('❌', '오류', '다시 시도해 주세요.');
+        // Supabase DB 데이터 수신 로직
+        async function fetchReportData() {
+            // URL Hash에서 UUID 추출 (`#uuid`)
+            const uuid = window.location.hash.replace('#', '').trim();
+            if (!uuid) {
+                document.getElementById('score-summary-text').innerText = "잘못된 접근 경로입니다.";
+                document.getElementById('llm-advice').innerText = "유효한 리포트 ID가 존재하지 않습니다.";
+                return;
             }
-        })
-        .catch(error => {
-            showStatus('❌', '오류', '서버와 연결할 수 없습니다.');
-        });
-    });
 
-    function showStatus(icon, title, desc) {
-        formContainer.style.display = 'none';
-        statusContainer.classList.add('active');
-        statusIcon.innerText = icon;
-        statusTitle.innerText = title;
-        statusDesc.innerHTML = desc;
-    }
-</script>
+            const targetUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${uuid}&select=*`;
+
+            try {
+                const response = await fetch(targetUrl, {
+                    method: 'GET',
+                    headers: {
+                        'apikey': SUPABASE_ANON_KEY,
+                        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) throw new Error("네트워크 응답 오류");
+
+                const data = await response.json();
+                if (Array.isArray(data) && data.length > 0) {
+                    renderReport(data[0]);
+                } else {
+                    document.getElementById('score-summary-text').innerText = "리포트를 찾을 수 없습니다.";
+                    document.getElementById('llm-advice').innerText = "데이터가 존재하지 않거나 생성되지 않았습니다.";
+                }
+            } catch (err) {
+                console.error("Data fetch error:", err);
+                document.getElementById('score-summary-text').innerText = "데이터 로딩 실패";
+                document.getElementById('llm-advice').innerText = "서버 데이터를 불러오는 중 오류가 발생했습니다.";
+            }
+        }
+
+        // 공유하기 & 저장 버튼 이벤트
+        document.getElementById('btn-share-report').addEventListener('click', () => {
+            if (navigator.share) {
+                navigator.share({
+                    title: 'AI 자세 분석 리포트',
+                    text: '나의 자세 분석 측정 결과를 확인해보세요!',
+                    url: window.location.href,
+                }).catch(() => {});
+            } else {
+                navigator.clipboard.writeText(window.location.href);
+                alert("리포트 링크가 클립보드에 복사되었습니다.");
+            }
+        });
+
+        document.getElementById('btn-save-report').addEventListener('click', () => {
+            window.print();
+        });
+
+        // 초기화 실행
+        window.addEventListener('DOMContentLoaded', fetchReportData);
+    </script>
 </body>
 </html>

@@ -1,0 +1,11 @@
+opencv-python
+pywebview
+mediapipe==0.10.9
+python-dotenv
+requests
+
+# --- ML classifier dependencies ---
+scikit-learn
+pandas
+numpy
+joblib
