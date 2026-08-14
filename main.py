@@ -9,9 +9,6 @@ import os
 import requests
 from dotenv import load_dotenv
 
-from ml.pose_classifier import LABEL_INFO, PostureClassifier
-from ml.pose_features import extract_features, feature_dict_to_vector
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
 load_dotenv(dotenv_path=env_path) if os.path.exists(env_path) else load_dotenv()
@@ -51,18 +48,6 @@ class CameraApp:
         raw_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
-
-        # ML 분류 모델이 model/posture_model.pkl 에 존재하면 자동으로 불러와서
-        # 각도 기반 규칙(rule-based) 대신 ML 기반 분석을 사용합니다.
-        # 아직 모델이 없다면(초기 상태) 기존 각도 기반 로직으로 자동 폴백(fallback)됩니다.
-        self.ml_classifier = PostureClassifier.load_if_exists()
-        self.use_ml = self.ml_classifier is not None
-        if self.use_ml:
-            print("[INFO] ML 모델을 로드했습니다. ML 기반 자세 분석을 사용합니다.")
-        else:
-            print("[INFO] 학습된 ML 모델이 없습니다 (model/posture_model.pkl). "
-                  "각도 기반(rule-based) 분석을 사용합니다.")
-            print("       -> collect_data.py 로 데이터 수집 후 train_model.py 로 학습하면 자동 전환됩니다.")
 
     def get_supabase_key(self):
         return self.supabase_anon_key
@@ -185,33 +170,6 @@ class CameraApp:
         is_normal = 1 if status_text == "정상" else 0
         return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle)
 
-    def _analyze_pose_ml(self, landmarks, w, h):
-        """
-        ML 분류기를 사용한 자세 분석. 반환 형식은 _analyze_pose()와 동일하게 맞춰서
-        프론트엔드(script.js)와 나머지 파이프라인을 수정하지 않고도 그대로 동작하게 합니다.
-        """
-        feature_dict = extract_features(landmarks, w, h)
-        if feature_dict is None:
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
-
-        vector = feature_dict_to_vector(feature_dict)
-        label, confidence, _proba = self.ml_classifier.predict(vector)
-
-        info = LABEL_INFO.get(label, {"score": 50, "text": label})
-        status_text = info["text"] if label != "normal" else "정상"
-        is_normal = 1 if label == "normal" else 0
-        health_score = int(info["score"])
-
-        return (
-            status_text,
-            is_normal,
-            health_score,
-            feature_dict["neck_angle"],
-            feature_dict["torso_angle"],
-            feature_dict["shoulder_angle"],
-            feature_dict["pelvis_angle"],
-        )
-
     def generate_llm_advice(self, metrics):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={self.gemini_api_key}"
         
@@ -276,8 +234,7 @@ class CameraApp:
             results = pose.process(rgb)
             
             if results.pose_landmarks:
-                analyze_fn = self._analyze_pose_ml if self.use_ml else self._analyze_pose
-                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = analyze_fn(results.pose_landmarks.landmark, w, h)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = self._analyze_pose(results.pose_landmarks.landmark, w, h)
                 mp.solutions.drawing_utils.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             else:
                 status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
@@ -309,15 +266,6 @@ class CameraApp:
     
     def close_window(self):
         window.destroy()
-
-    def set_analysis_mode(self, use_ml):
-        """프론트엔드에서 ML/규칙기반 모드를 토글하고 싶을 때 사용 (선택 사항)."""
-        with self.lock:
-            if use_ml and self.ml_classifier is None:
-                print("[WARN] ML 모델이 로드되어 있지 않아 규칙 기반 모드로 유지합니다.")
-                return False
-            self.use_ml = bool(use_ml)
-            return True
 
     def toggle_camera(self, enabled):
         with self.lock:
