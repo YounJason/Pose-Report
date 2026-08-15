@@ -9,6 +9,7 @@ let timeLeft = 60;
 let isPaused = false;
 
 let debugModeEnabled = false;
+let captureLoopStarted = false;
 
 let currentUuid = "";
 
@@ -17,7 +18,8 @@ let collectedMetrics = {
     turtle: [],
     torso: [],
     shoulder: [],
-    pelvis: []
+    pelvis: [],
+    legCross: []
 };
 
 let finalReportData = {
@@ -25,7 +27,8 @@ let finalReportData = {
     turtle: 0,
     torso: 0,
     shoulder: 0,
-    pelvis: 0
+    pelvis: 0,
+    legCrossSeconds: 0
 };
 
 let generatedLLMAdvice = "";
@@ -63,6 +66,11 @@ async function showScreen(index, useFade = true) {
     screens[currentIndex].classList.remove('active');
     currentIndex = index;
     screens[currentIndex].classList.add('active');
+
+    if (currentIndex === 1 && !captureLoopStarted) {
+        captureLoopStarted = true;
+        startCaptureLoop();
+    }
 
     if (currentIndex === 2) {
         currentUuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -111,7 +119,7 @@ async function showScreen(index, useFade = true) {
     if (currentIndex === 3) {
         if (window.pywebview) window.pywebview.api.toggle_camera(true);
 
-        collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [] };
+        collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
         timeLeft = 60;
         isPaused = false;
@@ -129,12 +137,14 @@ async function showScreen(index, useFade = true) {
                 clearInterval(countdownInterval);
 
                 const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                const legCrossRatio = calcAvg(collectedMetrics.legCross);
                 finalReportData = {
                     score: Math.round(calcAvg(collectedMetrics.scores)),
                     turtle: parseFloat(calcAvg(collectedMetrics.turtle).toFixed(1)),
                     torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
                     shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
-                    pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1))
+                    pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1)),
+                    legCrossSeconds: parseFloat((legCrossRatio * 60).toFixed(1))
                 };
 
                 showScreen(4, true);
@@ -299,7 +309,7 @@ document.getElementById('cfg-camera-source').addEventListener('change', syncCame
 document.getElementById('cfg-debug').addEventListener('change', syncCameraFieldsVisibility);
 syncCameraFieldsVisibility();
 
-document.getElementById('btn-save').addEventListener('click', () => {
+function startCaptureLoop() {
     const cameraSource = document.getElementById('cfg-camera-source').value;
     debugModeEnabled = cameraSource === 'astra' && document.getElementById('cfg-debug').checked;
 
@@ -318,13 +328,16 @@ document.getElementById('btn-save').addEventListener('click', () => {
             document.getElementById('cfg-debug-cam').value
         );
     }
+}
+
+document.getElementById('btn-save').addEventListener('click', () => {
     showScreen(1, false);
 });
 
 document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
 document.getElementById('btn-restart').addEventListener('click', () => showScreen(1, true));
 
-window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng) {
+window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross) {
     if (currentIndex !== 3) return;
 
     document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
@@ -339,8 +352,8 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
 
     statusBox.className = "status-overlay";
 
-    if (isNormal === 1) {
-        statusBox.classList.add("status-normal");
+    if (isNormal === 1 || isNormal === 0) {
+        statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
         isPaused = false;
         if (typeof score === 'number') {
             collectedMetrics.scores.push(score);
@@ -348,16 +361,7 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
             collectedMetrics.torso.push(torsoAng || 0);
             collectedMetrics.shoulder.push(shoulderAng || 0);
             collectedMetrics.pelvis.push(pelvisAng || 0);
-        }
-    } else if (isNormal === 0) {
-        statusBox.classList.add("status-warning");
-        isPaused = false;
-        if (typeof score === 'number') {
-            collectedMetrics.scores.push(score);
-            collectedMetrics.turtle.push(turtleAng || 0);
-            collectedMetrics.torso.push(torsoAng || 0);
-            collectedMetrics.shoulder.push(shoulderAng || 0);
-            collectedMetrics.pelvis.push(pelvisAng || 0);
+            collectedMetrics.legCross.push(legCross ? 1 : 0);
         }
     } else {
         statusBox.classList.add("status-unknown");

@@ -140,54 +140,58 @@ class CameraApp:
 
         status_list = []
 
-        neck_score = 1
-        trunk_score = 1
-        symmetry_penalty = 0
-        leg_cross_penalty = 0
+        def graded_score(angle, warn_threshold, severe_gap):
+            over = angle - warn_threshold
+            if over <= 0.0:
+                return 1.0
+            return 1.0 + (over / severe_gap) * 2.0
+
+        def excess_penalty(angle, threshold):
+            if threshold <= 0:
+                return 0.0
+            over = angle - threshold
+            return (over / threshold) if over > 0.0 else 0.0
 
         turtle_warn_threshold = self.TURTLE_NECK_ANGLE_THRESHOLD
         turtle_severe_threshold = turtle_warn_threshold + 8.0
-        if neck_angle <= turtle_warn_threshold:
-            neck_score = 1
-        elif neck_angle <= turtle_severe_threshold:
-            neck_score = 2
-        else:
-            neck_score = 3
+        neck_score = graded_score(neck_angle, turtle_warn_threshold, 8.0)
+        if neck_angle > turtle_severe_threshold:
             status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
 
-        if head_tilt_angle > self.HEAD_TILT_ANGLE_THRESHOLD:
-            neck_score += 1
+        head_tilt_penalty = excess_penalty(head_tilt_angle, self.HEAD_TILT_ANGLE_THRESHOLD)
+        if head_tilt_penalty > 0.0:
             status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
+        neck_score += head_tilt_penalty
 
         torso_warn_threshold = self.TORSO_ANGLE_THRESHOLD
         torso_severe_threshold = torso_warn_threshold + 10.0
-        if torso_angle <= torso_warn_threshold:
-            trunk_score = 1
-        elif torso_angle <= torso_severe_threshold:
-            trunk_score = 2
-        else:
-            trunk_score = 3
+        trunk_score = graded_score(torso_angle, torso_warn_threshold, 10.0)
+        if torso_angle > torso_severe_threshold:
             status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
 
-        if spine_lean_angle > self.SPINE_LEAN_ANGLE_THRESHOLD:
-            trunk_score += 1
+        spine_penalty = excess_penalty(spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD)
+        if spine_penalty > 0.0:
             status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
+        trunk_score += spine_penalty
 
-        if shoulder_angle > self.SHOULDER_ANGLE_THRESHOLD:
-            symmetry_penalty += 1
+        shoulder_penalty = excess_penalty(shoulder_angle, self.SHOULDER_ANGLE_THRESHOLD)
+        if shoulder_penalty > 0.0:
             status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
 
-        if pelvis_angle > self.PELVIS_ANGLE_THRESHOLD:
-            symmetry_penalty += 1
+        pelvis_penalty = excess_penalty(pelvis_angle, self.PELVIS_ANGLE_THRESHOLD)
+        if pelvis_penalty > 0.0:
             status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
 
+        symmetry_penalty = shoulder_penalty + pelvis_penalty
+
+        leg_cross_penalty = 0.0
         if leg_cross:
-            leg_cross_penalty = 2
+            leg_cross_penalty = 2.0
             status_list.append("다리 꼬기")
 
         total_risk_score = neck_score + trunk_score + symmetry_penalty + leg_cross_penalty
 
-        health_score = int(100 - ((total_risk_score - 2) / 10 * 100))
+        health_score = int(round(100 - ((total_risk_score - 2) / 10 * 100)))
         health_score = max(0, min(100, health_score))
 
         status_text = ", ".join(status_list) if status_list else "정상"
@@ -206,7 +210,7 @@ class CameraApp:
         ]
 
         if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
 
         nose = landmarks[mp_pose.PoseLandmark.NOSE]
         left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
@@ -247,7 +251,7 @@ class CameraApp:
             neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
             shoulder_angle, pelvis_angle, leg_cross
         )
-        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle)
+        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
 
     def _analyze_pose_3d(self, landmarks, points3d, valid, w, h):
 
@@ -260,7 +264,7 @@ class CameraApp:
             mp_pose.PoseLandmark.LEFT_ANKLE, mp_pose.PoseLandmark.RIGHT_ANKLE
         ]
         if landmarks is None or any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
 
         angle_landmarks_3d = [
             mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
@@ -268,7 +272,7 @@ class CameraApp:
             mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.RIGHT_HIP,
         ]
         if points3d is None or valid is None or any(not valid[lm.value] for lm in angle_landmarks_3d):
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
 
         def p3(lm):
             return points3d[lm.value].astype(np.float64)
@@ -310,7 +314,7 @@ class CameraApp:
             neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
             shoulder_angle, pelvis_angle, leg_cross
         )
-        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle)
+        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
 
     def generate_llm_advice(self, metrics):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={self.gemini_api_key}"
@@ -324,6 +328,7 @@ class CameraApp:
         - 등/허리 굽음 평균 각도: {metrics.get('torso')}° (기준치: {self.TORSO_ANGLE_THRESHOLD}° 이하)
         - 어깨 비대칭 평균 각도: {metrics.get('shoulder')}° (기준치: {self.SHOULDER_ANGLE_THRESHOLD}° 이하)
         - 골반 비대칭 평균 각도: {metrics.get('pelvis')}° (기준치: {self.PELVIS_ANGLE_THRESHOLD}° 이하)
+        - 다리 꼬기 지속 시간: 측정 60초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
 
         위 자세 측정 결과를 종합적으로 분석하여 사용자의 자세 습관과 문제점, 추천하는 방향을 지적해 주세요.
         답변은 읽기 쉽게 단락을 나누어 2문단 정도로 간결하게 한국어로 작성해 주세요.
@@ -393,10 +398,10 @@ class CameraApp:
             landmarks = results.pose_landmarks
             if landmarks:
                 mp.solutions.drawing_utils.draw_landmarks(frame, landmarks, mp_pose.POSE_CONNECTIONS)
-                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = self._analyze_pose(landmarks.landmark, w, h)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross = self._analyze_pose(landmarks.landmark, w, h)
             else:
-                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
-            self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
+            self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross)
 
         with self.lock:
             if self.cap:
@@ -406,21 +411,22 @@ class CameraApp:
     def _process_and_push_astra_frame(self, frame, landmarks, w, h, points3d, valid):
 
         if landmarks is not None and points3d is not None:
-            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang =\
+            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross =\
                 self._analyze_pose_3d(landmarks.landmark, points3d, valid, w, h)
         else:
-            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
 
-        self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang)
+        self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross)
 
-    def _push_frame_to_webview(self, frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang):
+    def _push_frame_to_webview(self, frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross):
 
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         b64_str = base64.b64encode(buffer).decode('utf-8')
         safe_text = status_text.replace("'", "\\'")
+        leg_cross_js = 'true' if leg_cross else 'false'
 
         try:
-            window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, {turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f})")
+            window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, {turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f}, {leg_cross_js})")
         except Exception as e:
 
             print(f"[camera] evaluate_js 실패, 이번 프레임은 건너뜀: {e}")
@@ -471,7 +477,7 @@ class CameraApp:
             print("[Astra Pro] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요.")
             try:
                 window.evaluate_js(
-                    "updateFrame('', 'Astra Pro 캘리브레이션 필요 (python main.py calibrate)', 2, 0, 0.0, 0.0, 0.0, 0.0)"
+                    "updateFrame('', 'Astra Pro 캘리브레이션 필요 (python main.py calibrate)', 2, 0, 0.0, 0.0, 0.0, 0.0, false)"
                 )
             except Exception:
                 pass
@@ -514,7 +520,7 @@ class CameraApp:
         )
         try:
             window.evaluate_js(
-                "updateFrame('', 'Astra Pro 초기화가 지연되고 있습니다 (장치 재연결/재시작 필요할 수 있음)', 2, 0, 0.0, 0.0, 0.0, 0.0)"
+                "updateFrame('', 'Astra Pro 초기화가 지연되고 있습니다 (장치 재연결/재시작 필요할 수 있음)', 2, 0, 0.0, 0.0, 0.0, 0.0, false)"
             )
         except Exception:
             pass
