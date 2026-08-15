@@ -1,77 +1,26 @@
-# -*- coding: utf-8 -*-
-"""
-pose3d_debug.py
-=================
-Pose-Report의 "디버그 모드"에서 사용하는 3D 스켈레톤 뷰어 모듈입니다.
 
-원래 pose-viewer(Astra Pro + MediaPipe + Open3D 실시간 3D 스켈레톤 뷰어) 프로젝트의
-config.py / camera.py / depth_align.py / skeleton_viewer.py / calibration.py 를
-Pose-Report에 이식하기 위해 파일 1개로 통합했습니다. (추가 파일 수를 최소화하기 위함)
-
-- Pose-Report 본 기능(설정 화면의 카메라 인덱스로 여는 2D 웹캠 + MediaPipe 자세 분석,
-  main.CameraApp)은 이 모듈과 무관하게 그대로 동작합니다.
-- 설정 화면(screen-1)에서 "디버그 모드"를 켜면, 계측 화면(screen-4)이 진행되는 동안
-  이 모듈이 별도의 Orbbec Astra Pro 깊이 카메라를 열어 MediaPipe로 검출한 관절을
-  3D로 역투영하고, Open3D 창에 실시간 스켈레톤을 "추가로" 띄웁니다.
-  (Open3D 창은 pywebview 창과 별개의 네이티브 창입니다 - pose-viewer 원본과 동일)
-- 이 모듈이 사용하는 카메라는 Pose-Report 본 기능이 사용하는 일반 웹캠과는 별개의
-  장치(Astra Pro)이므로, 설정 화면에서 장치 인덱스를 따로 입력받습니다.
-- 캘리브레이션 기능도 원본과 동일하게 유지됩니다:
-
-      python main.py calibrate
-
-  로 실행하면 RGB-Depth(IR) 스테레오 캘리브레이션 도구가 실행되고,
-  결과가 calibration_data/stereo_calibration.json 에 저장됩니다.
-  디버그 모드의 3D 스켈레톤 뷰어는 이 파일이 있어야 동작합니다.
-
-필요 패키지 (디버그 모드/캘리브레이션을 사용할 때만 필요):
-    pip install open3d openni
-필요 SDK: OpenNI2 (Orbbec Astra Pro의 Depth/IR 스트림 접근용, 별도 설치)
-
-주의: 위 패키지들은 이 파일을 import하는 시점이 아니라, 실제로 디버그 모드를
-켜거나 calibrate 를 실행하는 시점에만 로드됩니다. 그래서 디버그 모드를 쓰지
-않는 사용자는 openni/open3d를 설치하지 않아도 Pose-Report 본 기능을 그대로
-사용할 수 있습니다.
-"""
 import os
 import json
 
 import cv2
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# 설정 (원본 pose-viewer/config.py)
-# ---------------------------------------------------------------------------
-# 체커보드 내부 코너 개수 (가로, 세로). OpenCV 기준 "칸 수 - 1".
-#   예) 가로 10칸 x 세로 7칸으로 인쇄한 체커보드 -> 내부 코너 = 9 x 6
 CHECKERBOARD = (9, 6)
-SQUARE_SIZE = 0.029  # 한 칸의 실제 크기 (미터). 29mm = 0.029m
+SQUARE_SIZE = 0.029
 
-RGB_RESOLUTION = (640, 480)    # Astra Pro RGB(UVC) 해상도
-DEPTH_RESOLUTION = (640, 480)  # OpenNI2 Depth/IR 스트림 해상도
+RGB_RESOLUTION = (640, 480)
+DEPTH_RESOLUTION = (640, 480)
 FPS = 30
 
-# Astra Pro RGB(UVC) 카메라 기본 장치 인덱스.
-# Pose-Report 설정 화면의 "디버그 카메라 인덱스" 값으로 덮어씁니다.
 DEFAULT_DEBUG_RGB_DEVICE_INDEX = 1
 
-# OpenNI2 redist(SDK) 경로. 환경변수 OPENNI2_REDIST 로 지정하거나 None이면 시스템 기본 경로 사용.
 OPENNI_REDIST_PATH = os.environ.get("OPENNI2_REDIST", None)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIB_DIR = os.path.join(BASE_DIR, "calibration_data")
 CALIB_FILE = os.path.join(CALIB_DIR, "stereo_calibration.json")
 
-
-# ---------------------------------------------------------------------------
-# Astra Pro 카메라 래퍼 (원본 pose-viewer/camera.py)
-# ---------------------------------------------------------------------------
 class AstraCamera:
-    """
-    Depth / IR 스트림: OpenNI2(openni 패키지)를 통해 접근
-    RGB 스트림: Astra Pro는 컬러 카메라가 OpenNI2로 노출되지 않는 모델이 많아
-                별도의 UVC(USB Video Class) 장치로 인식되므로 OpenCV VideoCapture로 엽니다.
-    """
 
     def __init__(
         self,
@@ -80,70 +29,102 @@ class AstraCamera:
         depth_resolution=DEPTH_RESOLUTION,
         rgb_resolution=RGB_RESOLUTION,
         fps=FPS,
+        debug=False,
     ):
-        # openni는 디버그 모드를 실제로 켰을 때만 필요하므로 여기서 지연 import 합니다.
+        self._debug = debug
+
         from openni import openni2
         from openni import _openni2 as c_api
 
         self._openni2 = openni2
         self._c_api = c_api
 
-        openni2.initialize(openni_redist)
-        self.dev = openni2.Device.open_any()
-
-        # 주의: Astra류 구조광 카메라는 Depth와 IR이 동일한 물리 센서를 공유합니다.
-        # 두 스트림을 동시에 start() 하면 read_frame()이 프레임을 받지 못해
-        # 무한 대기(= "응답 없음")로 멈추는 경우가 많습니다. 그래서 스트림은
-        # 생성만 해두고, 실제 시작/정지는 start_depth()/stop_depth(),
-        # start_ir()/stop_ir() 로 필요한 시점에만 호출합니다.
-        self.depth_stream = self.dev.create_depth_stream()
-        self.depth_stream.set_video_mode(
-            c_api.OniVideoMode(
-                pixelFormat=c_api.OniPixelFormat.ONI_PIXEL_FORMAT_DEPTH_1_MM,
-                resolutionX=depth_resolution[0],
-                resolutionY=depth_resolution[1],
-                fps=fps,
-            )
-        )
-        self._depth_mirror_supported = True
-        try:
-            self.depth_stream.set_mirroring_enabled(False)
-        except Exception as e:
-            self._depth_mirror_supported = False
-            print("[디버그 모드][경고] Depth 스트림 미러링 설정 API 미지원. 소프트웨어 flip으로 대체:", e)
-        self._depth_started = False
-
-        # IR 스트림 (캘리브레이션 및 depth 내부파라미터 대용)
+        self.dev = None
+        self.depth_stream = None
         self.ir_stream = None
+        self.cap = None
+        self._depth_started = False
         self._ir_started = False
+        self._depth_mirror_supported = True
         self._ir_mirror_supported = True
+
         try:
-            self.ir_stream = self.dev.create_ir_stream()
-            self.ir_stream.set_video_mode(
+            if self._debug:
+                print("[Astra 캡처][진단]   openni2.initialize 시작...", flush=True)
+            openni2.initialize(openni_redist)
+            if self._debug:
+                print("[Astra 캡처][진단]   openni2.initialize 완료", flush=True)
+
+            if self._debug:
+                print("[Astra 캡처][진단]   Device.open_any() 시작...", flush=True)
+            self.dev = openni2.Device.open_any()
+            if self._debug:
+                print("[Astra 캡처][진단]   Device.open_any() 완료", flush=True)
+
+            if self._debug:
+                print("[Astra 캡처][진단]   create_depth_stream() 시작...", flush=True)
+            self.depth_stream = self.dev.create_depth_stream()
+            if self._debug:
+                print("[Astra 캡처][진단]   create_depth_stream() 완료", flush=True)
+
+            if self._debug:
+                print("[Astra 캡처][진단]   depth_stream.set_video_mode() 시작...", flush=True)
+            self.depth_stream.set_video_mode(
                 c_api.OniVideoMode(
-                    pixelFormat=c_api.OniPixelFormat.ONI_PIXEL_FORMAT_GRAY16,
-                    resolutionX=640,
-                    resolutionY=480,
+                    pixelFormat=c_api.OniPixelFormat.ONI_PIXEL_FORMAT_DEPTH_1_MM,
+                    resolutionX=depth_resolution[0],
+                    resolutionY=depth_resolution[1],
                     fps=fps,
                 )
             )
+            if self._debug:
+                print("[Astra 캡처][진단]   depth_stream.set_video_mode() 완료", flush=True)
             try:
-                self.ir_stream.set_mirroring_enabled(False)
+                self.depth_stream.set_mirroring_enabled(False)
             except Exception as e:
-                self._ir_mirror_supported = False
-                print("[디버그 모드][경고] IR 스트림 미러링 설정 API 미지원. 소프트웨어 flip으로 대체:", e)
-        except Exception as e:
-            print("[디버그 모드][경고] IR 스트림을 생성할 수 없습니다:", e)
+                self._depth_mirror_supported = False
+                print("[Astra 캡처][경고] Depth 스트림 미러링 설정 API 미지원. 소프트웨어 flip으로 대체:", e)
 
-        # RGB: UVC(OpenCV)
-        self.cap = cv2.VideoCapture(rgb_device_index)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, rgb_resolution[0])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rgb_resolution[1])
-        self.cap.set(cv2.CAP_PROP_FPS, fps)
+            if self._debug:
+                print("[Astra 캡처][진단]   create_ir_stream() 시작...", flush=True)
+            try:
+                self.ir_stream = self.dev.create_ir_stream()
+                if self._debug:
+                    print("[Astra 캡처][진단]   create_ir_stream() 완료", flush=True)
+                self.ir_stream.set_video_mode(
+                    c_api.OniVideoMode(
+                        pixelFormat=c_api.OniPixelFormat.ONI_PIXEL_FORMAT_GRAY16,
+                        resolutionX=640,
+                        resolutionY=480,
+                        fps=fps,
+                    )
+                )
+                try:
+                    self.ir_stream.set_mirroring_enabled(False)
+                except Exception as e:
+                    self._ir_mirror_supported = False
+                    print("[Astra 캡처][경고] IR 스트림 미러링 설정 API 미지원. 소프트웨어 flip으로 대체:", e)
+            except Exception as e:
+                print("[Astra 캡처][경고] IR 스트림을 생성할 수 없습니다:", e)
 
-        if not self.cap.isOpened():
-            print("[디버그 모드][경고] RGB(UVC) 카메라를 열지 못했습니다. 디버그 카메라 인덱스를 확인하세요.")
+            if self._debug:
+                print(f"[Astra 캡처][진단]   RGB cv2.VideoCapture({rgb_device_index}) 시작...", flush=True)
+            self.cap = cv2.VideoCapture(rgb_device_index)
+            if self._debug:
+                print("[Astra 캡처][진단]   RGB cv2.VideoCapture(...) 생성자 반환됨", flush=True)
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, rgb_resolution[0])
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rgb_resolution[1])
+            self.cap.set(cv2.CAP_PROP_FPS, fps)
+            if self._debug:
+                print(f"[Astra 캡처][진단]   RGB cap.isOpened()={self.cap.isOpened()}", flush=True)
+
+            if not self.cap.isOpened():
+                print("[Astra 캡처][경고] RGB(UVC) 카메라를 열지 못했습니다. 디버그 카메라 인덱스를 확인하세요.")
+        except Exception:
+            print("[Astra 캡처][오류] 초기화 도중 예외 발생. 지금까지 만든 핸들을 정리합니다...", flush=True)
+            self.release()
+            raise
 
     def start_depth(self):
         if self._ir_started:
@@ -172,7 +153,7 @@ class AstraCamera:
             self._ir_started = False
 
     def get_depth_frame(self, timeout_ms=1000):
-        """반환: (H, W) uint16, 단위 mm. timeout_ms 안에 프레임이 안 오면 None."""
+
         if not self._depth_started:
             return None
         ready = self._openni2.wait_for_any_stream([self.depth_stream], timeout=timeout_ms)
@@ -186,7 +167,7 @@ class AstraCamera:
         return buf
 
     def get_ir_frame(self, timeout_ms=1000):
-        """반환: (H, W) uint8 (정규화됨). timeout_ms 안에 프레임이 안 오면 None."""
+
         if self.ir_stream is None or not self._ir_started:
             return None
         ready = self._openni2.wait_for_any_stream([self.ir_stream], timeout=timeout_ms)
@@ -201,7 +182,7 @@ class AstraCamera:
         return img8
 
     def get_color_frame(self):
-        """반환: (H, W, 3) BGR uint8"""
+
         if not self.cap.isOpened():
             return None
         ret, frame = self.cap.read()
@@ -210,6 +191,7 @@ class AstraCamera:
         return frame
 
     def release(self):
+
         try:
             self.stop_depth()
         except Exception:
@@ -219,7 +201,23 @@ class AstraCamera:
         except Exception:
             pass
         try:
-            self.cap.release()
+            if self.depth_stream is not None:
+                self.depth_stream.close()
+        except Exception:
+            pass
+        try:
+            if self.ir_stream is not None:
+                self.ir_stream.close()
+        except Exception:
+            pass
+        try:
+            if self.dev is not None:
+                self.dev.close()
+        except Exception:
+            pass
+        try:
+            if self.cap is not None:
+                self.cap.release()
         except Exception:
             pass
         try:
@@ -227,11 +225,10 @@ class AstraCamera:
         except Exception:
             pass
 
+        self.depth_stream = None
+        self.ir_stream = None
+        self.dev = None
 
-# ---------------------------------------------------------------------------
-# 캘리브레이션 로드 + Depth -> RGB 정렬 + 픽셀 역투영(3D) 유틸리티
-# (원본 pose-viewer/depth_align.py)
-# ---------------------------------------------------------------------------
 def load_calibration(path=CALIB_FILE):
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -240,24 +237,22 @@ def load_calibration(path=CALIB_FILE):
     dist_rgb = np.array(data["rgb_dist_coeffs"], dtype=np.float64)
     K_ir = np.array(data["ir_camera_matrix"], dtype=np.float64)
     dist_ir = np.array(data["ir_dist_coeffs"], dtype=np.float64)
-    # Depth(IR) -> RGB 변환: P_rgb = R @ P_depth + T
+
     R = np.array(data["R"], dtype=np.float64)
     T = np.array(data["T"], dtype=np.float64).reshape(3, 1)
 
     return K_rgb, dist_rgb, K_ir, dist_ir, R, T
 
-
 def align_depth_to_color(depth_mm, K_depth, dist_depth, K_color, R, T, color_shape,
                           hole_fill_kernel_size=7):
-    """depth_mm(H,W uint16, mm)을 RGB 이미지 픽셀 그리드에 정렬합니다.
-    반환: (H_c, W_c) float32, 단위 m, 0=무효."""
+
     h_c, w_c = color_shape[:2]
 
     ys, xs = np.nonzero(depth_mm > 0)
     if len(xs) == 0:
         return np.zeros((h_c, w_c), dtype=np.float32)
 
-    zs = depth_mm[ys, xs].astype(np.float32) / 1000.0  # mm -> m
+    zs = depth_mm[ys, xs].astype(np.float32) / 1000.0
 
     pts = np.stack([xs, ys], axis=1).astype(np.float32).reshape(-1, 1, 2)
     undist = cv2.undistortPoints(pts, K_depth, dist_depth, P=K_depth).reshape(-1, 2)
@@ -298,7 +293,6 @@ def align_depth_to_color(depth_mm, K_depth, dist_depth, K_color, R, T, color_sha
     aligned = _fill_small_holes(aligned, kernel_size=hole_fill_kernel_size)
     return aligned
 
-
 def _fill_small_holes(depth_map, kernel_size=5):
     valid_mask = (depth_map > 0).astype(np.uint8)
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
@@ -312,10 +306,7 @@ def _fill_small_holes(depth_map, kernel_size=5):
     out[fill_target] = nearest[fill_target]
     return out
 
-
 class DepthPersistence:
-    """시간축 홀필링(temporal hole-filling). 먼 거리에서 IR 반사가 약해
-    depth가 프레임마다 깜빡이는 현상을 완화합니다."""
 
     def __init__(self, max_age_frames=10):
         self.max_age_frames = max_age_frames
@@ -341,9 +332,8 @@ class DepthPersistence:
         self.buffer = None
         self.age = None
 
-
 def sample_depth_near(aligned_depth, u, v, max_radius=15):
-    """(u, v)에 depth가 없으면 반경을 넓혀가며 가장 가까운 유효 depth를 찾습니다."""
+
     h, w = aligned_depth.shape
     if not (0 <= v < h and 0 <= u < w):
         return 0.0
@@ -359,9 +349,8 @@ def sample_depth_near(aligned_depth, u, v, max_radius=15):
             return float(patch[valid].min())
     return 0.0
 
-
 def backproject_point(u, v, depth_m, K_color, dist_color=None):
-    """RGB 픽셀(u, v)과 정렬된 depth 값(m)으로 RGB 카메라 좌표계 3D 점을 계산합니다."""
+
     if depth_m is None or depth_m <= 0:
         return None
 
@@ -378,13 +367,9 @@ def backproject_point(u, v, depth_m, K_color, dist_color=None):
     z = depth_m
     return np.array([x, y, z], dtype=np.float32)
 
-
-# ---------------------------------------------------------------------------
-# Open3D 실시간 3D 스켈레톤 뷰어 (원본 pose-viewer/skeleton_viewer.py)
-# ---------------------------------------------------------------------------
 class SkeletonViewer:
     def __init__(self, connections, window_name="Pose Report - Debug 3D Skeleton Viewer", width=960, height=720):
-        # open3d는 디버그 모드를 실제로 켰을 때만 필요하므로 여기서 지연 import 합니다.
+
         import open3d as o3d
         self._o3d = o3d
 
@@ -397,8 +382,7 @@ class SkeletonViewer:
         self.bone_lines = o3d.geometry.LineSet()
 
         self.vis.add_geometry(self.joint_cloud)
-        # lines가 0개인 상태로 add_geometry 하면 매 프레임 경고가 출력되므로,
-        # 선이 1개 이상 생기는 순간에만 add_geometry 하도록 관리합니다.
+
         self._bone_lines_added = False
 
         opt = self.vis.get_render_option()
@@ -412,7 +396,7 @@ class SkeletonViewer:
     def update(self, points3d, valid_mask):
         o3d = self._o3d
         pts = points3d.copy().astype(np.float64)
-        # 카메라 좌표계(y-down, z-forward) -> 보기 편한 좌표계(y-up, z-toward viewer)
+
         pts[:, 1] *= -1
         pts[:, 2] *= -1
 
@@ -455,7 +439,7 @@ class SkeletonViewer:
             self._first_update = False
 
     def poll(self):
-        """이벤트 처리 및 렌더링. 창이 닫혔으면 False 반환."""
+
         alive = self.vis.poll_events()
         self.vis.update_renderer()
         return alive
@@ -463,18 +447,7 @@ class SkeletonViewer:
     def close(self):
         self.vis.destroy_window()
 
-
-# ---------------------------------------------------------------------------
-# RGB - Depth(IR) 수동 스테레오 캘리브레이션 도구 (원본 pose-viewer/calibration.py)
-# ---------------------------------------------------------------------------
 class StereoCalibrator:
-    """
-    - RGB, IR 두 개의 창을 띄우고 체커보드를 비춥니다.
-    - 두 화면 모두에서 체커보드가 검출된 상태에서 마우스 좌클릭 또는 스페이스바로 캡처합니다.
-    - 최소 5장 이상 캡처한 뒤 'c' 키를 누르면 캘리브레이션을 실행하고
-      결과를 calibration_data/stereo_calibration.json 으로 저장합니다.
-    - 'q' 키로 종료합니다.
-    """
 
     def __init__(self, camera: AstraCamera):
         self.camera = camera
@@ -631,8 +604,6 @@ class StereoCalibrator:
         )
         print(f"  스테레오 RMS 재투영 오차: {ret:.4f} px")
 
-        # cv2.stereoCalibrate가 반환하는 R, T는 "camera1(RGB) -> camera2(IR)" 변환이므로
-        # 실사용에 필요한 "Depth(IR) -> RGB" 방향으로 역변환하여 저장합니다.
         R_d2c = R.T
         T_d2c = -R.T @ T
 
@@ -658,12 +629,8 @@ class StereoCalibrator:
 
         print(f"\n캘리브레이션 결과 저장 완료: {CALIB_FILE}")
 
-
-# ---------------------------------------------------------------------------
-# 진입점 함수 (main.py에서 호출)
-# ---------------------------------------------------------------------------
 def run_calibration(rgb_device_index=None):
-    """`python main.py calibrate` 로 호출되는 캘리브레이션 진입점."""
+
     cam = AstraCamera(
         rgb_device_index=rgb_device_index if rgb_device_index is not None else DEFAULT_DEBUG_RGB_DEVICE_INDEX
     )
@@ -673,37 +640,23 @@ def run_calibration(rgb_device_index=None):
     finally:
         cam.release()
 
+def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=None, show_viewer=True, debug=False):
 
-def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=None):
-    """
-    디버그 모드가 켜져 있을 때, 계측 화면(screen-4)이 진행되는 동안
-    별도 스레드에서 호출되는 함수입니다. Astra Pro 카메라로 3D 스켈레톤을
-    Open3D 창에 실시간으로 표시하다가, stop_event가 set 되거나 사용자가
-    Open3D 창을 닫으면 종료합니다.
-
-    frame_callback이 주어지면, 매 프레임마다 (관절이 그려진) BGR 프레임을
-    인자로 호출합니다. main.py는 이를 이용해 pywebview 화면에도 Astra RGB
-    영상을 함께 띄웁니다. frame_callback 실행 중 오류가 나도 3D 뷰어
-    루프에는 영향을 주지 않습니다.
-
-    Pose-Report 본 기능(2D 웹캠 분석)에는 영향을 주지 않도록, 모든 예외를
-    내부에서 처리하고 실패하더라도 조용히 종료합니다.
-    """
     if not os.path.exists(CALIB_FILE):
-        print(f"[디버그 모드] 캘리브레이션 파일이 없습니다: {CALIB_FILE}")
-        print("[디버그 모드] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요.")
+        print(f"[Astra 캡처] 캘리브레이션 파일이 없습니다: {CALIB_FILE}")
+        print("[Astra 캡처] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요.")
         return
 
     try:
         K_rgb, dist_rgb, K_ir, dist_ir, R, T = load_calibration(CALIB_FILE)
     except Exception as e:
-        print(f"[디버그 모드] 캘리브레이션 파일을 불러오지 못했습니다: {e}")
+        print(f"[Astra 캡처] 캘리브레이션 파일을 불러오지 못했습니다: {e}")
         return
 
     try:
         import mediapipe as mp
     except Exception as e:
-        print(f"[디버그 모드] mediapipe를 불러오지 못했습니다: {e}")
+        print(f"[Astra 캡처] mediapipe를 불러오지 못했습니다: {e}")
         return
 
     mp_pose = mp.solutions.pose
@@ -714,20 +667,50 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
     pose_model = None
     viewer = None
     try:
+        if debug:
+            print("[Astra 캡처][진단] 1/4 AstraCamera 생성 시작...", flush=True)
         cam = AstraCamera(
-            rgb_device_index=rgb_device_index if rgb_device_index is not None else DEFAULT_DEBUG_RGB_DEVICE_INDEX
+            rgb_device_index=rgb_device_index if rgb_device_index is not None else DEFAULT_DEBUG_RGB_DEVICE_INDEX,
+            debug=debug,
         )
+        if debug:
+            print("[Astra 캡처][진단] 1/4 AstraCamera 생성 완료", flush=True)
+
+        if debug:
+            print("[Astra 캡처][진단] 2/4 depth 스트림 시작...", flush=True)
         cam.start_depth()
+        if debug:
+            print("[Astra 캡처][진단] 2/4 depth 스트림 시작 완료", flush=True)
+
         pose_model = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
-        viewer = SkeletonViewer(connections)
+
+        if show_viewer:
+            if debug:
+                print("[디버그 모드][진단] 3/4 SkeletonViewer(Open3D 창) 생성 시작...", flush=True)
+            viewer = SkeletonViewer(connections)
+            if debug:
+                print("[디버그 모드][진단] 3/4 SkeletonViewer 생성 완료", flush=True)
+        else:
+            if debug:
+                print("[디버그 모드][진단] 3/4 SkeletonViewer 생략 (Open3D 창 표시 안 함)", flush=True)
+
         depth_persist = DepthPersistence(max_age_frames=10)
 
-        print("[디버그 모드] 3D 스켈레톤 뷰어 실행 중.")
+        print("[Astra 캡처] 캡처 루프 실행 중 (Open3D 뷰어 유무와 무관하게 항상 동작).", flush=True)
 
+        frame_count = 0
         while not stop_event.is_set():
+            frame_count += 1
+            if frame_count <= 5 or frame_count % 60 == 0:
+                if debug:
+                    print(f"[Astra 캡처][진단] 4/4 루프 프레임 #{frame_count} 시작", flush=True)
+
             rgb = cam.get_color_frame()
             depth = cam.get_depth_frame()
             if rgb is None or depth is None:
+                if frame_count <= 5:
+                    if debug:
+                        print(f"[Astra 캡처][진단] 프레임 #{frame_count}: rgb={rgb is None and 'None' or 'OK'}, depth={depth is None and 'None' or 'OK'} -> skip", flush=True)
                 cv2.waitKey(1)
                 continue
 
@@ -737,15 +720,6 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
             rgb_input = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
             rgb_input.flags.writeable = False
             results = pose_model.process(rgb_input)
-
-            if frame_callback is not None:
-                try:
-                    disp = rgb.copy()
-                    if results.pose_landmarks:
-                        mp.solutions.drawing_utils.draw_landmarks(disp, results.pose_landmarks, connections)
-                    frame_callback(disp)
-                except Exception:
-                    pass
 
             points3d = np.zeros((num_landmarks, 3), dtype=np.float32)
             valid = np.zeros(num_landmarks, dtype=bool)
@@ -767,13 +741,25 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
                         points3d[i] = p3d
                         valid[i] = True
 
-            viewer.update(points3d, valid)
-            alive = viewer.poll()
-            if not alive:
-                break
+            if frame_callback is not None:
+                try:
+                    disp = rgb.copy()
+                    if results.pose_landmarks:
+                        mp.solutions.drawing_utils.draw_landmarks(disp, results.pose_landmarks, connections)
+
+                    h_disp, w_disp = rgb.shape[:2]
+                    frame_callback(disp, results.pose_landmarks, w_disp, h_disp, points3d, valid)
+                except Exception:
+                    pass
+
+            if show_viewer:
+                viewer.update(points3d, valid)
+                alive = viewer.poll()
+                if not alive:
+                    break
             cv2.waitKey(1)
     except Exception as e:
-        print(f"[디버그 모드] 3D 스켈레톤 뷰어 오류: {e}")
+        print(f"[Astra 캡처] 오류: {e}")
     finally:
         if viewer is not None:
             try:
@@ -790,4 +776,4 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
                 cam.release()
             except Exception:
                 pass
-        print("[디버그 모드] 3D 스켈레톤 뷰어 종료.")
+        print("[Astra 캡처] 종료.")

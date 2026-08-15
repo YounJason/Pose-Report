@@ -6,7 +6,7 @@ let reportLoadingTimeout = null;
 let typingInterval = null;
 
 let timeLeft = 60;
-let isPaused = false; 
+let isPaused = false;
 
 let debugModeEnabled = false;
 
@@ -65,8 +65,8 @@ async function showScreen(index, useFade = true) {
     screens[currentIndex].classList.add('active');
 
     if (currentIndex === 2) {
-        currentUuid = (typeof crypto !== 'undefined' && crypto.randomUUID) 
-            ? crypto.randomUUID() 
+        currentUuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
             : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
                 const r = Math.random() * 16 | 0;
                 const v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -116,21 +116,18 @@ async function showScreen(index, useFade = true) {
         timeLeft = 60;
         isPaused = false;
         const timerEl = document.getElementById('timer');
-        timerEl.innerText = debugModeEnabled ? "DEBUG" : "60";
-
-        const debugWrapper = document.getElementById('debug-viewfinder-wrapper');
-        if (debugWrapper) debugWrapper.style.display = debugModeEnabled ? 'block' : 'none';
+        timerEl.innerText = "60";
 
         clearInterval(countdownInterval);
         countdownInterval = setInterval(() => {
-            if (isPaused || debugModeEnabled) return;
+            if (isPaused) return;
 
             timeLeft--;
             timerEl.innerText = String(timeLeft).padStart(2, '0');
 
             if (timeLeft <= 0) {
                 clearInterval(countdownInterval);
-                
+
                 const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
                 finalReportData = {
                     score: Math.round(calcAvg(collectedMetrics.scores)),
@@ -147,7 +144,7 @@ async function showScreen(index, useFade = true) {
 
     if (currentIndex === 4) {
         const helptext = document.querySelector('.help-text');
-        
+
         (async () => {
             helptext.innerText = "리포트를 생성하는 중...";
             try {
@@ -159,15 +156,12 @@ async function showScreen(index, useFade = true) {
             } catch (e) {
                 generatedLLMAdvice = "AI 피드백을 생성하는 중 오류가 발생했습니다.";
             }
-
-            await delay(500);
-
             helptext.innerText = "리포트를 업로드 하는 중...";
             try {
                 if (window.pywebview?.api?.get_supabase_key && currentUuid) {
                     const anonKey = await window.pywebview.api.get_supabase_key();
                     const updateUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${currentUuid}`;
-                    
+
                     const payload = {
                         result: {
                             metrics: finalReportData,
@@ -189,12 +183,6 @@ async function showScreen(index, useFade = true) {
             } catch (err) {
                 console.error(err);
             }
-
-            await delay(500);
-
-            helptext.innerText = "마무리하는 중...";
-            await delay(500);
-
             showScreen(5, true);
         })();
     }
@@ -283,14 +271,37 @@ async function showScreen(index, useFade = true) {
                     } else {
                         clearInterval(typingInterval);
                     }
-                }, 15);
+                }, 0);
             }
         }, fadeDelay);
     }
 }
 
+function syncCameraFieldsVisibility() {
+    const sourceEl = document.getElementById('cfg-camera-source');
+    const isAstra = sourceEl ? sourceEl.value === 'astra' : false;
+
+    const camGroup = document.getElementById('cfg-cam-group');
+    const debugCamGroup = document.getElementById('cfg-debug-cam-group');
+    const debugGroup = document.getElementById('cfg-debug-group');
+
+    if (camGroup) camGroup.style.display = isAstra ? 'none' : '';
+    if (debugCamGroup) debugCamGroup.style.display = isAstra ? '' : 'none';
+    if (debugGroup) debugGroup.style.display = isAstra ? '' : 'none';
+
+    if (!isAstra) {
+        const debugCb = document.getElementById('cfg-debug');
+        if (debugCb) debugCb.checked = false;
+    }
+}
+
+document.getElementById('cfg-camera-source').addEventListener('change', syncCameraFieldsVisibility);
+document.getElementById('cfg-debug').addEventListener('change', syncCameraFieldsVisibility);
+syncCameraFieldsVisibility();
+
 document.getElementById('btn-save').addEventListener('click', () => {
-    debugModeEnabled = document.getElementById('cfg-debug').checked;
+    const cameraSource = document.getElementById('cfg-camera-source').value;
+    debugModeEnabled = cameraSource === 'astra' && document.getElementById('cfg-debug').checked;
 
     if (window.pywebview?.api) {
         window.pywebview.api.setup_and_start(
@@ -300,8 +311,10 @@ document.getElementById('btn-save').addEventListener('click', () => {
             document.getElementById('cfg-pelvis').value,
             document.getElementById('cfg-head').value,
             document.getElementById('cfg-spine').value,
-            document.getElementById('cfg-cam').value,
-            document.getElementById('cfg-debug').checked,
+
+            cameraSource === 'astra' ? "" : document.getElementById('cfg-cam').value,
+            cameraSource,
+            debugModeEnabled,
             document.getElementById('cfg-debug-cam').value
         );
     }
@@ -317,13 +330,13 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
     document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
 
     const statusBox = document.getElementById('status-box');
-    
+
     if (typeof score !== 'undefined' && isNormal !== 2) {
         statusBox.innerText = `${statusText} (점수: ${score}점)`;
     } else {
         statusBox.innerText = statusText;
     }
-    
+
     statusBox.className = "status-overlay";
 
     if (isNormal === 1) {

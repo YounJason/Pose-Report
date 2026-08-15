@@ -352,9 +352,8 @@
     <script>
         const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
-        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MzA3NTUsImV4cCI6MjEwMDEwNjc1NX0.Uj2gl4nVLrRJPGwxyJv6zmgUOWu3JuRlIVwydn9ygCw"; 
-    
-        // 각도 기준값
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MzA3NTUsImV4cCI6MjEwMDEwNjc1NX0.Uj2gl4nVLrRJPGwxyJv6zmgUOWu3JuRlIVwydn9ygCw";
+
         const THRESHOLDS = {
             turtle: 10.0,
             torso: 20.0,
@@ -362,19 +361,16 @@
             pelvis: 4.0
         };
 
-        // UI 데이터 렌더링 함수
         function renderReport(data) {
             const metrics = data.result?.metrics || {};
             const advice = data.result?.advice || "등록된 피드백이 없습니다.";
             const createdAt = data.created_at ? new Date(data.created_at).toLocaleString('ko-KR') : new Date().toLocaleString('ko-KR');
 
-            // 1. 측정일시
             document.getElementById('report-date').innerText = `측정일시: ${createdAt}`;
 
-            // 2. 점수 애니메이션 및 요약
             const score = metrics.score || 0;
             document.getElementById('report-score').innerText = score;
-            
+
             const scoreRing = document.getElementById('score-ring-progress');
             const circumference = 314;
             const offset = circumference * (1 - score / 100);
@@ -382,7 +378,6 @@
                 scoreRing.style.strokeDashoffset = offset;
             }, 100);
 
-            // 3. 세부 항목 게이지 및 상태 표현 렌더링
             const renderMetric = (valId, barId, value, threshold, goodTxt, warnTxt) => {
                 const valEl = document.getElementById(valId);
                 const barEl = document.getElementById(barId);
@@ -393,7 +388,7 @@
 
                 const barRatio = Math.max(10, Math.min(100, Math.round(100 - (value / (threshold * 2)) * 100)));
                 barEl.className = `progress-bar-fill ${isGood ? 'fill-good' : 'fill-warning'}`;
-                
+
                 setTimeout(() => {
                     barEl.style.width = `${barRatio}%`;
                 }, 100);
@@ -404,13 +399,11 @@
             renderMetric('val-shoulder', 'bar-shoulder', metrics.shoulder || 0, THRESHOLDS.shoulder, '정상', '주의');
             renderMetric('val-pelvis', 'bar-pelvis', metrics.pelvis || 0, THRESHOLDS.pelvis, '정상', '주의');
 
-            // 4. AI 피드백
             document.getElementById('llm-advice').innerText = advice;
         }
 
-        // Supabase DB 데이터 수신 로직
         async function fetchReportData() {
-            // URL Hash에서 UUID 추출 (`#uuid`)
+
             const uuid = window.location.hash.replace('#', '').trim();
             if (!uuid) {
                 document.getElementById('score-summary-text').innerText = "잘못된 접근 경로입니다.";
@@ -446,7 +439,6 @@
             }
         }
 
-        // 공유하기 & 저장 버튼 이벤트
         document.getElementById('btn-share-report').addEventListener('click', () => {
             if (navigator.share) {
                 navigator.share({
@@ -464,7 +456,6 @@
             window.print();
         });
 
-        // 초기화 실행
         window.addEventListener('DOMContentLoaded', fetchReportData);
     </script>
 </body>

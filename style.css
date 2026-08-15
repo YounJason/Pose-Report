@@ -115,6 +115,13 @@ p {
     cursor: pointer;
 }
 
+.form-group select {
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid #dadce0;
+    font-size: 1rem;
+}
+
 .animated-bg {
     position: absolute;
     top: 50%;

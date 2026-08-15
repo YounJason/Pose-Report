@@ -1,5 +1,6 @@
 import cv2
 import mediapipe as mp
+import numpy as np
 import webview
 import threading
 import base64
@@ -33,14 +34,47 @@ def is_intersect(p1, q1, p2, q2):
         return True
     return False
 
+def _vector_angle_deg(v1, v2):
+
+    v1 = np.asarray(v1, dtype=np.float64)
+    v2 = np.asarray(v2, dtype=np.float64)
+    n1 = np.linalg.norm(v1)
+    n2 = np.linalg.norm(v2)
+    if n1 < 1e-6 or n2 < 1e-6:
+        return 0.0
+    cos_val = float(np.dot(v1, v2) / (n1 * n2))
+    cos_val = max(-1.0, min(1.0, cos_val))
+    return math.degrees(math.acos(cos_val))
+
+def _axis_deviation_deg(v, axis):
+
+    angle = _vector_angle_deg(v, axis)
+    return angle if angle <= 90.0 else 180.0 - angle
+
+def _detect_leg_cross(landmarks, w, h):
+
+    left_hip = (int(landmarks[mp_pose.PoseLandmark.LEFT_HIP].x * w), int(landmarks[mp_pose.PoseLandmark.LEFT_HIP].y * h))
+    right_hip = (int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].x * w), int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].y * h))
+    left_knee = (int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE].x * w), int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE].y * h))
+    right_knee = (int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].x * w), int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].y * h))
+    left_ankle = (int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].x * w), int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].y * h))
+    right_ankle = (int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].x * w), int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].y * h))
+
+    return (is_intersect(left_hip, left_knee, right_hip, right_knee) or
+            is_intersect(left_hip, left_knee, right_knee, right_ankle) or
+            is_intersect(left_knee, left_ankle, right_hip, right_knee) or
+            is_intersect(left_knee, left_ankle, right_knee, right_ankle))
+
 class CameraApp:
     def __init__(self):
         self.camera_enabled = False
+
+        self.capture_active = False
         self.running = True
         self.current_camera_idx = 0
         self.cap = None
         self.lock = threading.Lock()
-        
+
         self.TURTLE_NECK_ANGLE_THRESHOLD = 10.0
         self.TORSO_ANGLE_THRESHOLD = 20.0
         self.SHOULDER_ANGLE_THRESHOLD = 5.0
@@ -48,12 +82,19 @@ class CameraApp:
         self.HEAD_TILT_ANGLE_THRESHOLD = 5.0
         self.SPINE_LEAN_ANGLE_THRESHOLD = 8.0
 
-        # 디버그 모드: 켜져 있으면 계측 중 별도의 Astra Pro 카메라로 3D 스켈레톤
-        # 뷰어(Open3D 창)를 추가로 띄웁니다. pose3d_debug 모듈이 이 기능을 담당합니다.
+        self.camera_source = 'webcam'
+
         self.debug_mode_enabled = False
+
         self.debug_cam_idx = pose3d_debug.DEFAULT_DEBUG_RGB_DEVICE_INDEX
         self._debug_thread = None
         self._debug_stop_event = None
+
+        self._debug_latest_frame = None
+        self._debug_frame_lock = threading.Lock()
+
+        self._debug_first_frame_event = threading.Event()
+        self.ASTRA_INIT_WATCHDOG_TIMEOUT_SEC = 10.0
 
         raw_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
@@ -63,7 +104,7 @@ class CameraApp:
         return self.supabase_anon_key
 
     def setup_and_start(self, turtle, torso, shoulder, pelvis, head, spine, camera_idx,
-                         debug_mode_enabled=False, debug_cam_idx=None):
+                         camera_source='webcam', debug_mode_enabled=False, debug_cam_idx=None):
         with self.lock:
             self.TURTLE_NECK_ANGLE_THRESHOLD = float(turtle)
             self.TORSO_ANGLE_THRESHOLD = float(torso)
@@ -71,24 +112,86 @@ class CameraApp:
             self.PELVIS_ANGLE_THRESHOLD = float(pelvis)
             self.HEAD_TILT_ANGLE_THRESHOLD = float(head)
             self.SPINE_LEAN_ANGLE_THRESHOLD = float(spine)
-            self.current_camera_idx = int(camera_idx)
-            self.camera_enabled = True
-            if self.cap:
-                self.cap.release()
-                self.cap = None
 
-            self.debug_mode_enabled = bool(debug_mode_enabled)
+            self.camera_source = (camera_source or 'webcam').strip().lower()
+            if self.camera_source not in ('webcam', 'astra'):
+                self.camera_source = 'webcam'
+
+            self.debug_mode_enabled = bool(debug_mode_enabled) and self.camera_source == 'astra'
             if debug_cam_idx not in (None, ""):
                 self.debug_cam_idx = int(debug_cam_idx)
 
-    def _analyze_pose(self, landmarks, w, h):
+            if self.camera_source == 'webcam' and camera_idx not in (None, ""):
+                self.current_camera_idx = int(camera_idx)
+            self.camera_enabled = True
+
+        self._stop_astra_capture()
+        with self.lock:
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            self.capture_active = True
+
+        if self.camera_source == 'astra':
+            self._start_astra_capture()
+
+    def _score_from_angles(self, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+                            shoulder_angle, pelvis_angle, leg_cross):
+
         status_list = []
-        
+
         neck_score = 1
         trunk_score = 1
         symmetry_penalty = 0
         leg_cross_penalty = 0
-        
+
+        if neck_angle <= 10:
+            neck_score = 1
+        elif 10 < neck_angle <= 20:
+            neck_score = 2
+        else:
+            neck_score = 3
+            status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
+
+        if head_tilt_angle > self.HEAD_TILT_ANGLE_THRESHOLD:
+            neck_score += 1
+            status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
+
+        if torso_angle <= 5:
+            trunk_score = 1
+        elif 5 < torso_angle <= 20:
+            trunk_score = 2
+        else:
+            trunk_score = 3
+            status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
+
+        if spine_lean_angle > self.SPINE_LEAN_ANGLE_THRESHOLD:
+            trunk_score += 1
+            status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
+
+        if shoulder_angle > self.SHOULDER_ANGLE_THRESHOLD:
+            symmetry_penalty += 1
+            status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
+
+        if pelvis_angle > self.PELVIS_ANGLE_THRESHOLD:
+            symmetry_penalty += 1
+            status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
+
+        if leg_cross:
+            leg_cross_penalty = 2
+            status_list.append("다리 꼬기")
+
+        total_risk_score = neck_score + trunk_score + symmetry_penalty + leg_cross_penalty
+
+        health_score = int(100 - ((total_risk_score - 2) / 10 * 100))
+        health_score = max(0, min(100, health_score))
+
+        status_text = ", ".join(status_list) if status_list else "정상"
+        is_normal = 1 if status_text == "정상" else 0
+        return status_text, is_normal, health_score
+
+    def _analyze_pose(self, landmarks, w, h):
+
         required_landmarks = [
             mp_pose.PoseLandmark.NOSE,
             mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
@@ -97,7 +200,7 @@ class CameraApp:
             mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.RIGHT_KNEE,
             mp_pose.PoseLandmark.LEFT_ANKLE, mp_pose.PoseLandmark.RIGHT_ANKLE
         ]
-        
+
         if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
             return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
 
@@ -108,7 +211,7 @@ class CameraApp:
         right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
         left_hip_lm = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
         right_hip_lm = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
-        
+
         ls_x, ls_y = left_shoulder.x * w, left_shoulder.y * h
         rs_x, rs_y = right_shoulder.x * w, right_shoulder.y * h
         lh_x, lh_y = left_hip_lm.x * w, left_hip_lm.y * h
@@ -119,77 +222,94 @@ class CameraApp:
         dy = nose.y - (left_ear.y + right_ear.y) / 2
         dz = ((left_ear.z + right_ear.z) / 2) - nose.z
         neck_angle = 90 - math.degrees(math.atan2(abs(dz), dy)) if dy != 0 else 0
-        
-        if neck_angle <= 10:
-            neck_score = 1
-        elif 10 < neck_angle <= 20:
-            neck_score = 2
-        else:
-            neck_score = 3
-            status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
-            
+
         head_tilt_angle = math.degrees(math.atan2(abs(le_y - re_y), abs(le_x - re_x))) if le_x != re_x else 90.0
-        if head_tilt_angle > self.HEAD_TILT_ANGLE_THRESHOLD:
-            neck_score += 1
-            status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
 
         dy_torso = ((left_hip_lm.y + right_hip_lm.y) / 2) - ((left_shoulder.y + right_shoulder.y) / 2)
         dz_torso = ((left_hip_lm.z + right_hip_lm.z) / 2) - ((left_shoulder.z + right_shoulder.z) / 2)
         torso_angle = math.degrees(math.atan2(abs(dz_torso), dy_torso)) if dy_torso != 0 else 0
-        
-        if torso_angle <= 5:
-            trunk_score = 1
-        elif 5 < torso_angle <= 20:
-            trunk_score = 2
-        else:
-            trunk_score = 3
-            status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
-            
+
         dx_spine = ((ls_x + rs_x) / 2) - ((lh_x + rh_x) / 2)
         dy_spine = ((lh_y + rh_y) / 2) - ((ls_y + rs_y) / 2)
         spine_lean_angle = math.degrees(math.atan2(abs(dx_spine), dy_spine)) if dy_spine != 0 else 90.0
-        if spine_lean_angle > self.SPINE_LEAN_ANGLE_THRESHOLD:
-            trunk_score += 1
-            status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
 
         shoulder_angle = math.degrees(math.atan2(abs(ls_y - rs_y), abs(ls_x - rs_x))) if ls_x != rs_x else 90.0
-        if shoulder_angle > self.SHOULDER_ANGLE_THRESHOLD:
-            symmetry_penalty += 1
-            status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
-        
+
         pelvis_angle = math.degrees(math.atan2(abs(lh_y - rh_y), abs(lh_x - rh_x))) if lh_x != rh_x else 90.0
-        if pelvis_angle > self.PELVIS_ANGLE_THRESHOLD:
-            symmetry_penalty += 1
-            status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
-        
-        left_hip = (int(lh_x), int(lh_y))
-        right_hip = (int(rh_x), int(rh_y))
-        left_knee = (int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE].x * w), int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE].y * h))
-        right_knee = (int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].x * w), int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].y * h))
-        left_ankle = (int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].x * w), int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].y * h))
-        right_ankle = (int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].x * w), int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].y * h))
-        
-        if (is_intersect(left_hip, left_knee, right_hip, right_knee) or
-            is_intersect(left_hip, left_knee, right_knee, right_ankle) or
-            is_intersect(left_knee, left_ankle, right_hip, right_knee) or
-            is_intersect(left_knee, left_ankle, right_knee, right_ankle)):
-            leg_cross_penalty = 2
-            status_list.append("다리 꼬기")
-        
-        total_risk_score = neck_score + trunk_score + symmetry_penalty + leg_cross_penalty
-        
-        health_score = int(100 - ((total_risk_score - 2) / 10 * 100))
-        health_score = max(0, min(100, health_score))
-        
-        status_text = ", ".join(status_list) if status_list else "정상"
-        is_normal = 1 if status_text == "정상" else 0
+
+        leg_cross = _detect_leg_cross(landmarks, w, h)
+
+        status_text, is_normal, health_score = self._score_from_angles(
+            neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+            shoulder_angle, pelvis_angle, leg_cross
+        )
+        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle)
+
+    def _analyze_pose_3d(self, landmarks, points3d, valid, w, h):
+
+        required_landmarks = [
+            mp_pose.PoseLandmark.NOSE,
+            mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
+            mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.RIGHT_SHOULDER,
+            mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.RIGHT_HIP,
+            mp_pose.PoseLandmark.LEFT_KNEE, mp_pose.PoseLandmark.RIGHT_KNEE,
+            mp_pose.PoseLandmark.LEFT_ANKLE, mp_pose.PoseLandmark.RIGHT_ANKLE
+        ]
+        if landmarks is None or any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+
+        angle_landmarks_3d = [
+            mp_pose.PoseLandmark.NOSE, mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
+            mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.RIGHT_SHOULDER,
+            mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.RIGHT_HIP,
+        ]
+        if points3d is None or valid is None or any(not valid[lm.value] for lm in angle_landmarks_3d):
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+
+        def p3(lm):
+            return points3d[lm.value].astype(np.float64)
+
+        nose3d = p3(mp_pose.PoseLandmark.NOSE)
+        le3d = p3(mp_pose.PoseLandmark.LEFT_EAR)
+        re3d = p3(mp_pose.PoseLandmark.RIGHT_EAR)
+        ls3d = p3(mp_pose.PoseLandmark.LEFT_SHOULDER)
+        rs3d = p3(mp_pose.PoseLandmark.RIGHT_SHOULDER)
+        lh3d = p3(mp_pose.PoseLandmark.LEFT_HIP)
+        rh3d = p3(mp_pose.PoseLandmark.RIGHT_HIP)
+
+        mid_shoulder = (ls3d + rs3d) / 2.0
+        mid_hip = (lh3d + rh3d) / 2.0
+
+        UP = np.array([0.0, -1.0, 0.0])
+        HORIZONTAL = np.array([1.0, 0.0, 0.0])
+
+        neck_vec = nose3d - mid_shoulder
+        neck_angle = _vector_angle_deg(neck_vec, UP)
+
+        head_tilt_angle = _axis_deviation_deg(re3d - le3d, HORIZONTAL)
+
+        torso_vec = mid_shoulder - mid_hip
+        torso_angle = _vector_angle_deg(torso_vec, UP)
+
+        torso_vec_xy = np.array([torso_vec[0], torso_vec[1], 0.0])
+        spine_lean_angle = _vector_angle_deg(torso_vec_xy, UP)
+
+        shoulder_angle = _axis_deviation_deg(rs3d - ls3d, HORIZONTAL)
+        pelvis_angle = _axis_deviation_deg(rh3d - lh3d, HORIZONTAL)
+
+        leg_cross = _detect_leg_cross(landmarks, w, h)
+
+        status_text, is_normal, health_score = self._score_from_angles(
+            neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+            shoulder_angle, pelvis_angle, leg_cross
+        )
         return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle)
 
     def generate_llm_advice(self, metrics):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={self.gemini_api_key}"
-        
+
         prompt = f"""
-        당신은 자세 교정 전문 AI 트레이너입니다. 
+        당신은 자세 교정 전문 AI 트레이너입니다.
         사용자의 60초간 측정한 자세 데이터는 다음과 같습니다:
 
         - 종합 자세 점수: {metrics.get('score')}점 / 100점
@@ -198,8 +318,8 @@ class CameraApp:
         - 어깨 비대칭 평균 각도: {metrics.get('shoulder')}° (기준치: {self.SHOULDER_ANGLE_THRESHOLD}° 이하)
         - 골반 비대칭 평균 각도: {metrics.get('pelvis')}° (기준치: {self.PELVIS_ANGLE_THRESHOLD}° 이하)
 
-        위 자세 측정 결과를 종합적으로 분석하여 사용자의 자세 습관과 문제점을 지적해 주세요.
-        답변은 읽기 쉽게 단락을 나누어 한국어로 작성해 주세요.
+        위 자세 측정 결과를 종합적으로 분석하여 사용자의 자세 습관과 문제점, 추천하는 방향을 지적해 주세요.
+        답변은 읽기 쉽게 단락을 나누어 2문단 정도로 간결하게 한국어로 작성해 주세요.
         마크다운을 사용하지 말고 줄글로 작성하세요.
         """
 
@@ -223,48 +343,87 @@ class CameraApp:
             return f"피드백 생성 중 오류가 발생했습니다: {str(e)}"
 
     def start_camera_thread(self):
+
         while self.running:
             time.sleep(0.01)
-            if not self.camera_enabled:
+            if not self.capture_active:
                 with self.lock:
                     if self.cap:
                         self.cap.release()
                         self.cap = None
                 time.sleep(0.2)
                 continue
-                
+
+            if self.camera_source == 'astra':
+                with self._debug_frame_lock:
+                    pending = self._debug_latest_frame
+                    self._debug_latest_frame = None
+                if pending is None:
+                    time.sleep(0.01)
+                    continue
+                if self.camera_enabled:
+                    frame, landmarks, w, h, points3d, valid = pending
+                    self._process_and_push_astra_frame(frame, landmarks, w, h, points3d, valid)
+                continue
+
             with self.lock:
                 if self.cap is None or not self.cap.isOpened():
                     self.cap = cv2.VideoCapture(self.current_camera_idx)
                     self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
                     self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
-                    
+
             success, frame = self.cap.read()
             if not success:
                 time.sleep(0.03)
                 continue
-                
+
+            if not self.camera_enabled:
+                continue
+
             h, w, _ = frame.shape
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = pose.process(rgb)
-            
-            if results.pose_landmarks:
-                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = self._analyze_pose(results.pose_landmarks.landmark, w, h)
-                mp.solutions.drawing_utils.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+            landmarks = results.pose_landmarks
+            if landmarks:
+                mp.solutions.drawing_utils.draw_landmarks(frame, landmarks, mp_pose.POSE_CONNECTIONS)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = self._analyze_pose(landmarks.landmark, w, h)
             else:
                 status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+            self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang)
 
-            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            b64_str = base64.b64encode(buffer).decode('utf-8')
-            safe_text = status_text.replace("'", "\\'")
-            
-            try:
-                window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, {turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f})")
-            except:
-                break
-                
-        if self.cap:
-            self.cap.release()
+        with self.lock:
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+
+    def _process_and_push_astra_frame(self, frame, landmarks, w, h, points3d, valid):
+
+        if landmarks is not None and points3d is not None:
+            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang =\
+                self._analyze_pose_3d(landmarks.landmark, points3d, valid, w, h)
+        else:
+            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
+
+        self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang)
+
+    def _push_frame_to_webview(self, frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang):
+
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        b64_str = base64.b64encode(buffer).decode('utf-8')
+        safe_text = status_text.replace("'", "\\'")
+
+        try:
+            window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, {turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f})")
+        except Exception as e:
+
+            print(f"[camera] evaluate_js 실패, 이번 프레임은 건너뜀: {e}")
+
+    def _on_astra_frame(self, frame, landmarks, w, h, points3d, valid):
+
+        with self._debug_frame_lock:
+            self._debug_latest_frame = (frame, landmarks, w, h, points3d, valid)
+
+        self._debug_first_frame_event.set()
 
     def change_camera(self, index):
         with self.lock:
@@ -275,43 +434,79 @@ class CameraApp:
 
     def on_closing(self):
         self.running = False
-        self._stop_debug_viewer()
+        self.capture_active = False
+        self._stop_astra_capture()
 
     def toggle_fullscreen(self):
         window.toggle_fullscreen()
-    
+
     def close_window(self):
         window.destroy()
 
     def toggle_camera(self, enabled):
+
         with self.lock:
             self.camera_enabled = enabled
-            if not enabled and self.cap:
-                self.cap.release()
-                self.cap = None
 
-        if enabled:
-            self._start_debug_viewer()
-        else:
-            self._stop_debug_viewer()
+    def _start_astra_capture(self):
 
-    def _start_debug_viewer(self):
-        """디버그 모드가 켜져 있으면, 계측 중 별도 스레드로 3D 스켈레톤 뷰어(Open3D 창)를 띄웁니다.
-        본 계측 흐름에 영향을 주지 않도록 실패해도 조용히 무시합니다."""
-        if not self.debug_mode_enabled:
+        if self.camera_source != 'astra':
             return
         if self._debug_thread is not None and self._debug_thread.is_alive():
             return
+
+        if not os.path.exists(pose3d_debug.CALIB_FILE):
+            print(f"[Astra Pro] 캘리브레이션 파일이 없습니다: {pose3d_debug.CALIB_FILE}")
+            print("[Astra Pro] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요.")
+            try:
+                window.evaluate_js(
+                    "updateFrame('', 'Astra Pro 캘리브레이션 필요 (python main.py calibrate)', 2, 0, 0.0, 0.0, 0.0, 0.0)"
+                )
+            except Exception:
+                pass
+            return
+
         self._debug_stop_event = threading.Event()
+        with self._debug_frame_lock:
+            self._debug_latest_frame = None
+        self._debug_first_frame_event.clear()
         self._debug_thread = threading.Thread(
             target=pose3d_debug.run_debug_skeleton_viewer,
             args=(self._debug_stop_event,),
-            kwargs={"rgb_device_index": self.debug_cam_idx},
+            kwargs={
+                "rgb_device_index": self.debug_cam_idx,
+
+                "frame_callback": self._on_astra_frame,
+
+                "show_viewer": self.debug_mode_enabled,
+
+                "debug": self.debug_mode_enabled,
+            },
             daemon=True,
         )
         self._debug_thread.start()
 
-    def _stop_debug_viewer(self):
+        threading.Thread(target=self._watch_astra_capture_startup, daemon=True).start()
+
+    def _watch_astra_capture_startup(self):
+
+        got_frame = self._debug_first_frame_event.wait(timeout=self.ASTRA_INIT_WATCHDOG_TIMEOUT_SEC)
+        if got_frame or self._debug_stop_event is None or self._debug_stop_event.is_set():
+            return
+        print(
+            f"[Astra 캡처][감시] {self.ASTRA_INIT_WATCHDOG_TIMEOUT_SEC:.0f}초 안에 "
+            "첫 프레임을 받지 못했습니다. AstraCamera 초기화(OpenNI2 호출) 도중 "
+            "멈춰있을 가능성이 있습니다. 장치를 재연결하거나 앱을 재시작해보세요.",
+            flush=True,
+        )
+        try:
+            window.evaluate_js(
+                "updateFrame('', 'Astra Pro 초기화가 지연되고 있습니다 (장치 재연결/재시작 필요할 수 있음)', 2, 0, 0.0, 0.0, 0.0, 0.0)"
+            )
+        except Exception:
+            pass
+
+    def _stop_astra_capture(self):
         if self._debug_stop_event is not None:
             self._debug_stop_event.set()
         if self._debug_thread is not None:
@@ -321,8 +516,7 @@ class CameraApp:
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == 'calibrate':
-        # 디버그 모드(3D 스켈레톤 뷰어)용 Astra Pro RGB-Depth 스테레오 캘리브레이션.
-        # 사용법: python main.py calibrate [rgb_device_index]
+
         cam_idx = int(sys.argv[2]) if len(sys.argv) > 2 else None
         pose3d_debug.run_calibration(rgb_device_index=cam_idx)
     else:
