@@ -8,6 +8,8 @@ let typingInterval = null;
 let timeLeft = 60;
 let isPaused = false; 
 
+let debugModeEnabled = false;
+
 let currentUuid = "";
 
 let collectedMetrics = {
@@ -114,11 +116,14 @@ async function showScreen(index, useFade = true) {
         timeLeft = 60;
         isPaused = false;
         const timerEl = document.getElementById('timer');
-        timerEl.innerText = "60";
+        timerEl.innerText = debugModeEnabled ? "DEBUG" : "60";
+
+        const debugWrapper = document.getElementById('debug-viewfinder-wrapper');
+        if (debugWrapper) debugWrapper.style.display = debugModeEnabled ? 'block' : 'none';
 
         clearInterval(countdownInterval);
         countdownInterval = setInterval(() => {
-            if (isPaused) return;
+            if (isPaused || debugModeEnabled) return;
 
             timeLeft--;
             timerEl.innerText = String(timeLeft).padStart(2, '0');
@@ -285,6 +290,8 @@ async function showScreen(index, useFade = true) {
 }
 
 document.getElementById('btn-save').addEventListener('click', () => {
+    debugModeEnabled = document.getElementById('cfg-debug').checked;
+
     if (window.pywebview?.api) {
         window.pywebview.api.setup_and_start(
             document.getElementById('cfg-turtle').value,
@@ -293,7 +300,9 @@ document.getElementById('btn-save').addEventListener('click', () => {
             document.getElementById('cfg-pelvis').value,
             document.getElementById('cfg-head').value,
             document.getElementById('cfg-spine').value,
-            document.getElementById('cfg-cam').value
+            document.getElementById('cfg-cam').value,
+            document.getElementById('cfg-debug').checked,
+            document.getElementById('cfg-debug-cam').value
         );
     }
     showScreen(1, false);
@@ -341,6 +350,12 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
         statusBox.classList.add("status-unknown");
         isPaused = true;
     }
+};
+
+window.updateDebugFrame = function(base64Image) {
+    if (currentIndex !== 3) return;
+    const debugImg = document.getElementById('debug-viewfinder');
+    if (debugImg) debugImg.src = 'data:image/jpeg;base64,' + base64Image;
 };
 
 window.addEventListener('keydown', (e) => {

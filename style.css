@@ -104,6 +104,17 @@ p {
     width: 180px;
 }
 
+.checkbox-group {
+    display: flex;
+    align-items: center;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
 .animated-bg {
     position: absolute;
     top: 50%;
@@ -165,6 +176,23 @@ p {
     max-width: 800px;
 }
 
+.debug-viewfinder-wrapper {
+    max-width: 480px;
+    border: 1px solid #1a73e8;
+}
+
+.debug-badge {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    background-color: rgba(26, 115, 232, 0.9);
+    color: #ffffff;
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
 .viewfinder-wrapper {
     position: relative;
     width: 100%;
@@ -175,7 +203,8 @@ p {
     overflow: hidden;
 }
 
-#viewfinder {
+#viewfinder,
+#debug-viewfinder {
     width: 100%;
     height: 100%;
     object-fit: cover;

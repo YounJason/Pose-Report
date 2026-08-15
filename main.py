@@ -6,8 +6,11 @@ import base64
 import time
 import math
 import os
+import sys
 import requests
 from dotenv import load_dotenv
+
+import pose3d_debug
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
@@ -44,7 +47,14 @@ class CameraApp:
         self.PELVIS_ANGLE_THRESHOLD = 4.0
         self.HEAD_TILT_ANGLE_THRESHOLD = 5.0
         self.SPINE_LEAN_ANGLE_THRESHOLD = 8.0
-        
+
+        # 디버그 모드: 켜져 있으면 계측 중 별도의 Astra Pro 카메라로 3D 스켈레톤
+        # 뷰어(Open3D 창)를 추가로 띄웁니다. pose3d_debug 모듈이 이 기능을 담당합니다.
+        self.debug_mode_enabled = False
+        self.debug_cam_idx = pose3d_debug.DEFAULT_DEBUG_RGB_DEVICE_INDEX
+        self._debug_thread = None
+        self._debug_stop_event = None
+
         raw_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -52,7 +62,8 @@ class CameraApp:
     def get_supabase_key(self):
         return self.supabase_anon_key
 
-    def setup_and_start(self, turtle, torso, shoulder, pelvis, head, spine, camera_idx):
+    def setup_and_start(self, turtle, torso, shoulder, pelvis, head, spine, camera_idx,
+                         debug_mode_enabled=False, debug_cam_idx=None):
         with self.lock:
             self.TURTLE_NECK_ANGLE_THRESHOLD = float(turtle)
             self.TORSO_ANGLE_THRESHOLD = float(torso)
@@ -65,6 +76,10 @@ class CameraApp:
             if self.cap:
                 self.cap.release()
                 self.cap = None
+
+            self.debug_mode_enabled = bool(debug_mode_enabled)
+            if debug_cam_idx not in (None, ""):
+                self.debug_cam_idx = int(debug_cam_idx)
 
     def _analyze_pose(self, landmarks, w, h):
         status_list = []
@@ -260,6 +275,7 @@ class CameraApp:
 
     def on_closing(self):
         self.running = False
+        self._stop_debug_viewer()
 
     def toggle_fullscreen(self):
         window.toggle_fullscreen()
@@ -274,9 +290,44 @@ class CameraApp:
                 self.cap.release()
                 self.cap = None
 
+        if enabled:
+            self._start_debug_viewer()
+        else:
+            self._stop_debug_viewer()
+
+    def _start_debug_viewer(self):
+        """디버그 모드가 켜져 있으면, 계측 중 별도 스레드로 3D 스켈레톤 뷰어(Open3D 창)를 띄웁니다.
+        본 계측 흐름에 영향을 주지 않도록 실패해도 조용히 무시합니다."""
+        if not self.debug_mode_enabled:
+            return
+        if self._debug_thread is not None and self._debug_thread.is_alive():
+            return
+        self._debug_stop_event = threading.Event()
+        self._debug_thread = threading.Thread(
+            target=pose3d_debug.run_debug_skeleton_viewer,
+            args=(self._debug_stop_event,),
+            kwargs={"rgb_device_index": self.debug_cam_idx},
+            daemon=True,
+        )
+        self._debug_thread.start()
+
+    def _stop_debug_viewer(self):
+        if self._debug_stop_event is not None:
+            self._debug_stop_event.set()
+        if self._debug_thread is not None:
+            self._debug_thread.join(timeout=3.0)
+        self._debug_thread = None
+        self._debug_stop_event = None
+
 if __name__ == '__main__':
-    app_logic = CameraApp()
-    window = webview.create_window('Pose Report', 'index.html', width=800, height=600, js_api=app_logic)
-    window.events.closing += app_logic.on_closing
-    threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
-    webview.start()
+    if len(sys.argv) > 1 and sys.argv[1] == 'calibrate':
+        # 디버그 모드(3D 스켈레톤 뷰어)용 Astra Pro RGB-Depth 스테레오 캘리브레이션.
+        # 사용법: python main.py calibrate [rgb_device_index]
+        cam_idx = int(sys.argv[2]) if len(sys.argv) > 2 else None
+        pose3d_debug.run_calibration(rgb_device_index=cam_idx)
+    else:
+        app_logic = CameraApp()
+        window = webview.create_window('Pose Report', 'index.html', width=800, height=600, js_api=app_logic)
+        window.events.closing += app_logic.on_closing
+        threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
+        webview.start()
