@@ -17,12 +17,12 @@
     <div id="app">
         <div class="screen setup-screen" id="screen-1">
             <h2>시스템 초기 설정</h2>
-            <div class="form-group"><label>거북목 기준 각도</label><input type="number" id="cfg-turtle" value="18.0" step="0.1"></div>
-            <div class="form-group"><label>등 굽음 기준 각도</label><input type="number" id="cfg-torso" value="28.0" step="0.1"></div>
-            <div class="form-group"><label>어깨 비대칭 기준 각도</label><input type="number" id="cfg-shoulder" value="8.0" step="0.1"></div>
-            <div class="form-group"><label>골반 비대칭 기준 각도</label><input type="number" id="cfg-pelvis" value="7.0" step="0.1"></div>
-            <div class="form-group"><label>목 기울어짐 기준 각도</label><input type="number" id="cfg-head" value="5.0" step="0.1"></div>
-            <div class="form-group"><label>상체 불균형 기준 각도</label><input type="number" id="cfg-spine" value="8.0" step="0.1"></div>
+            <div class="form-group"><label>거북목 기준 각도</label><input type="number" id="cfg-turtle" value="18.0" step="0.5"></div>
+            <div class="form-group"><label>등 굽음 기준 각도</label><input type="number" id="cfg-torso" value="28.0" step="0.5"></div>
+            <div class="form-group"><label>어깨 비대칭 기준 각도</label><input type="number" id="cfg-shoulder" value="8.0" step="0.5"></div>
+            <div class="form-group"><label>골반 비대칭 기준 각도</label><input type="number" id="cfg-pelvis" value="7.0" step="0.5"></div>
+            <div class="form-group"><label>목 기울어짐 기준 각도</label><input type="number" id="cfg-head" value="5.0" step="0.5"></div>
+            <div class="form-group"><label>상체 불균형 기준 각도</label><input type="number" id="cfg-spine" value="8.0" step="0.5"></div>
             <div class="form-group" id="cfg-source-group">
                 <label>카메라 소스</label>
                 <select id="cfg-camera-source">
@@ -31,9 +31,17 @@
                 </select>
             </div>
             <div class="form-group" id="cfg-cam-group" style="display:none;"><label>카메라 장치 인덱스</label><input type="number" id="cfg-cam" value="0" step="1"></div>
-            <div class="form-group" id="cfg-debug-cam-group"><label>Astra Pro 카메라 인덱스</label><input type="number" id="cfg-debug-cam" value="1" step="1"></div>
+            <div class="form-group" id="cfg-debug-cam-group"><label>Astra Pro 카메라 인덱스</label><input type="number" id="cfg-debug-cam" value="0" step="1"></div>
             <div class="form-group checkbox-group" id="cfg-debug-group"><label for="cfg-debug">디버그 모드 (3D 스켈레톤 뷰어 창 표시)</label><input type="checkbox" id="cfg-debug"></div>
             <button id="btn-save" class="save-btn">설정 완료</button>
+        </div>
+
+        <div class="screen" id="screen-camera-loading">
+            <div class="loading-card">
+                <div class="loading-spinner"></div>
+                <h2>카메라를 불러오는 중입니다</h2>
+                <p class="help-text">카메라 장치를 초기화하고 있습니다. 잠시만 기다려주세요.</p>
+            </div>
         </div>
 
         <div class="screen" id="screen-2">
@@ -55,6 +63,9 @@
                     <img id="viewfinder" alt="Camera Feed">
                     <div class="timer-badge" id="timer">60</div>
                     <div class="status-overlay status-unknown" id="status-box">인식되지 않음</div>
+                    <div class="precountdown-overlay" id="precountdown-overlay">
+                        <span id="precountdown-number">3</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -63,7 +74,7 @@
             <div class="loading-card">
                 <div class="loading-spinner"></div>
                 <h2>리포트를 생성하는 중입니다</h2>
-                <p class="help-text"></p>
+                <p class="help-text" id="report-loading-helptext"></p>
             </div>
         </div>
 

@@ -11,6 +11,11 @@ let isPaused = false;
 let debugModeEnabled = false;
 let captureLoopStarted = false;
 
+let cameraLoadingTimeout = null;
+
+let sittingConfirmed = false;
+let preCountdownTimeout = null;
+
 let currentUuid = "";
 
 let collectedMetrics = {
@@ -45,15 +50,22 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function showScreen(index, useFade = true) {
     if (index < 0 || index >= screens.length) return;
 
-    if (currentIndex === 3) {
+    if (currentIndex === 1) {
+        clearTimeout(cameraLoadingTimeout);
+    }
+
+    if (currentIndex === 4) {
         clearInterval(countdownInterval);
+        clearTimeout(preCountdownTimeout);
+        preCountdownTimeout = null;
+        sittingConfirmed = false;
         if (window.pywebview) window.pywebview.api.toggle_camera(false);
     }
 
-    if (currentIndex === 2) clearInterval(privacyPollInterval);
+    if (currentIndex === 3) clearInterval(privacyPollInterval);
     clearTimeout(reportLoadingTimeout);
 
-    if (currentIndex === 5) {
+    if (currentIndex === 6) {
         document.querySelectorAll('.progress-bar-fill').forEach(bar => bar.style.width = '0%');
         const scoreRing = document.getElementById('score-ring-progress');
         if (scoreRing) scoreRing.style.strokeDashoffset = '314';
@@ -67,12 +79,21 @@ async function showScreen(index, useFade = true) {
     currentIndex = index;
     screens[currentIndex].classList.add('active');
 
-    if (currentIndex === 1 && !captureLoopStarted) {
-        captureLoopStarted = true;
-        startCaptureLoop();
+    if (currentIndex === 1) {
+        if (!captureLoopStarted) {
+            captureLoopStarted = true;
+            startCaptureLoop();
+        }
+
+        // Safety fallback: if the backend never reports the camera as ready
+        // (e.g. hardware issue), don't leave the user stuck on this screen forever.
+        clearTimeout(cameraLoadingTimeout);
+        cameraLoadingTimeout = setTimeout(() => {
+            if (currentIndex === 1) showScreen(2, true);
+        }, 20000);
     }
 
-    if (currentIndex === 2) {
+    if (currentIndex === 3) {
         currentUuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
             ? crypto.randomUUID()
             : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -107,7 +128,7 @@ async function showScreen(index, useFade = true) {
                     .then(data => {
                         if (Array.isArray(data) && data.length >= 1) {
                             clearInterval(privacyPollInterval);
-                            showScreen(3, true);
+                            showScreen(4, true);
                         }
                     })
                     .catch(() => {});
@@ -116,13 +137,18 @@ async function showScreen(index, useFade = true) {
         }, 1000);
     }
 
-    if (currentIndex === 3) {
+    if (currentIndex === 4) {
         if (window.pywebview) window.pywebview.api.toggle_camera(true);
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
         timeLeft = 60;
-        isPaused = false;
+        // The 60s timer stays paused until the user's sitting posture is
+        // confirmed and the 3-second pre-countdown finishes (see updateFrame).
+        isPaused = true;
+        sittingConfirmed = false;
+        hidePreCountdown();
+
         const timerEl = document.getElementById('timer');
         timerEl.innerText = "60";
 
@@ -147,13 +173,13 @@ async function showScreen(index, useFade = true) {
                     legCrossSeconds: parseFloat((legCrossRatio * 60).toFixed(1))
                 };
 
-                showScreen(4, true);
+                showScreen(5, true);
             }
         }, 1000);
     }
 
-    if (currentIndex === 4) {
-        const helptext = document.querySelector('.help-text');
+    if (currentIndex === 5) {
+        const helptext = document.getElementById('report-loading-helptext');
 
         (async () => {
             helptext.innerText = "리포트를 생성하는 중...";
@@ -184,8 +210,7 @@ async function showScreen(index, useFade = true) {
                     const payload = {
                         result: {
                             metrics: finalReportData,
-                            advice: generatedLLMAdvice,
-                            thresholds
+                            advice: generatedLLMAdvice
                         }
                     };
 
@@ -203,11 +228,11 @@ async function showScreen(index, useFade = true) {
             } catch (err) {
                 console.error(err);
             }
-            showScreen(5, true);
+            showScreen(6, true);
         })();
     }
 
-    if (currentIndex === 5) {
+    if (currentIndex === 6) {
         try {
             const qrDownloadContainer = document.getElementById("qrcode-download");
             if (qrDownloadContainer) {
@@ -344,11 +369,68 @@ document.getElementById('btn-save').addEventListener('click', () => {
     showScreen(1, false);
 });
 
-document.getElementById('btn-start').addEventListener('click', () => showScreen(2, true));
-document.getElementById('btn-restart').addEventListener('click', () => showScreen(1, true));
+document.getElementById('btn-start').addEventListener('click', () => showScreen(3, true));
+document.getElementById('btn-restart').addEventListener('click', () => showScreen(2, true));
+
+// Called from the Python backend once the (webcam or Astra) camera has
+// delivered its first frame, i.e. the 3D camera load triggered on the
+// loading screen has finished. Auto-advance to the main screen.
+window.onCameraReady = function () {
+    if (currentIndex === 1) {
+        clearTimeout(cameraLoadingTimeout);
+        showScreen(2, true);
+    }
+};
+
+function hidePreCountdown() {
+    clearTimeout(preCountdownTimeout);
+    preCountdownTimeout = null;
+    const overlay = document.getElementById('precountdown-overlay');
+    if (overlay) overlay.classList.remove('active');
+}
+
+function restartPreCountdownAnimation(numberEl) {
+    numberEl.style.animation = 'none';
+    void numberEl.offsetWidth; // force reflow to restart the CSS animation
+    numberEl.style.animation = '';
+}
+
+// Runs a 3-2-1 on-screen countdown after the user's seated posture is first
+// confirmed, and only resumes the 60s measurement timer once it completes.
+function startPreCountdown() {
+    const overlay = document.getElementById('precountdown-overlay');
+    const numberEl = document.getElementById('precountdown-number');
+    if (!overlay || !numberEl) {
+        // Fallback: no overlay available, just start immediately.
+        sittingConfirmed = true;
+        isPaused = false;
+        return;
+    }
+
+    clearTimeout(preCountdownTimeout);
+    let count = 3;
+    overlay.classList.add('active');
+    numberEl.textContent = String(count);
+    restartPreCountdownAnimation(numberEl);
+
+    const tick = () => {
+        count -= 1;
+        if (count <= 0) {
+            overlay.classList.remove('active');
+            preCountdownTimeout = null;
+            sittingConfirmed = true;
+            isPaused = false;
+            return;
+        }
+        numberEl.textContent = String(count);
+        restartPreCountdownAnimation(numberEl);
+        preCountdownTimeout = setTimeout(tick, 1000);
+    };
+    preCountdownTimeout = setTimeout(tick, 1000);
+}
 
 window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross) {
-    if (currentIndex !== 3) return;
+    if (currentIndex !== 4) return;
 
     document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
 
@@ -364,23 +446,35 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
 
     if (isNormal === 1 || isNormal === 0) {
         statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
-        isPaused = false;
-        if (typeof score === 'number') {
-            collectedMetrics.scores.push(score);
-            collectedMetrics.turtle.push(turtleAng || 0);
-            collectedMetrics.torso.push(torsoAng || 0);
-            collectedMetrics.shoulder.push(shoulderAng || 0);
-            collectedMetrics.pelvis.push(pelvisAng || 0);
-            collectedMetrics.legCross.push(legCross ? 1 : 0);
+
+        // Seated posture just became detected: run the 3-second pre-countdown
+        // before the 60s measurement timer is allowed to run.
+        if (!sittingConfirmed && preCountdownTimeout === null) {
+            isPaused = true;
+            startPreCountdown();
+        }
+
+        if (sittingConfirmed) {
+            isPaused = false;
+            if (typeof score === 'number') {
+                collectedMetrics.scores.push(score);
+                collectedMetrics.turtle.push(turtleAng || 0);
+                collectedMetrics.torso.push(torsoAng || 0);
+                collectedMetrics.shoulder.push(shoulderAng || 0);
+                collectedMetrics.pelvis.push(pelvisAng || 0);
+                collectedMetrics.legCross.push(legCross ? 1 : 0);
+            }
         }
     } else {
         statusBox.classList.add("status-unknown");
         isPaused = true;
+        sittingConfirmed = false;
+        hidePreCountdown();
     }
 };
 
 window.updateDebugFrame = function(base64Image) {
-    if (currentIndex !== 3) return;
+    if (currentIndex !== 4) return;
     const debugImg = document.getElementById('debug-viewfinder');
     if (debugImg) debugImg.src = 'data:image/jpeg;base64,' + base64Image;
 };

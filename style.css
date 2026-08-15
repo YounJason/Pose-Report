@@ -258,6 +258,46 @@ p {
     letter-spacing: 0.5px;
 }
 
+.precountdown-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(32, 33, 36, 0.55);
+    z-index: 3;
+}
+
+.precountdown-overlay.active {
+    display: flex;
+}
+
+#precountdown-number {
+    color: #ffffff;
+    font-size: 8rem;
+    font-weight: 700;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+    animation: precountdown-pop 1s ease-in-out;
+}
+
+@keyframes precountdown-pop {
+    0% {
+        transform: scale(0.5);
+        opacity: 0;
+    }
+    30% {
+        transform: scale(1.15);
+        opacity: 1;
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
 .loading-card {
     display: flex;
     flex-direction: column;

@@ -21,24 +21,26 @@
 
 ## 화면 구성
 
-앱은 `index.html`의 `.screen` 6개를 `showScreen(index)`로 전환하는 SPA 구조입니다.
+앱은 `index.html`의 `.screen` 7개를 `showScreen(index)`로 전환하는 SPA 구조입니다.
 
 | index | id | 화면 |
 |---|---|---|
 | 0 | `screen-1` | 초기 설정 (기준 각도, 카메라 소스, 디버그 모드) |
-| 1 | `screen-2` | 메인 화면 ("시작하기") — **여기 진입 시 카메라 캡처 루프가 시작됩니다** |
-| 2 | `screen-3` | QR 개인정보 동의 (모바일 스캔 대기) |
-| 3 | `screen-4` | 60초 측정 (카메라 프리뷰 + 실시간 점수) |
-| 4 | `screen-5` | 리포트 생성 중 (AI 피드백 요청 + 업로드) |
-| 5 | `screen-6` | 최종 리포트 (점수, 세부 항목, AI 피드백, 다운로드용 QR) |
+| 1 | `screen-camera-loading` | 카메라 로딩 대기 — **여기 진입 시 카메라 캡처 루프(3D 카메라 로드)가 시작되고, 첫 프레임이 도착하면 자동으로 메인 화면으로 전환됩니다** |
+| 2 | `screen-2` | 메인 화면 ("시작하기") |
+| 3 | `screen-3` | QR 개인정보 동의 (모바일 스캔 대기) |
+| 4 | `screen-4` | 60초 측정 (카메라 프리뷰 + 실시간 점수). 착석이 확인되면 3초 카운트다운 후 타이머가 시작됩니다 |
+| 5 | `screen-5` | 리포트 생성 중 (AI 피드백 요청 + 업로드) |
+| 6 | `screen-6` | 최종 리포트 (점수, 세부 항목, AI 피드백, 다운로드용 QR) |
 
 ## 파일 구조
 
 ```
 Pose-Report/
 ├── main.py                  # pywebview 진입점, CameraApp(js_api): 자세 분석/점수 계산/Gemini 호출
-├── pose3d_debug.py          # Astra Pro 캡처, 3D 역투영, 스테레오 캘리브레이션, Open3D 뷰어
-├── index.html                # 데스크톱 앱 UI (화면 6개, SPA)
+│                              #   + Astra Pro 캡처, 3D 역투영, 스테레오 캘리브레이션, Open3D 뷰어
+│                              #   (구 pose3d_debug.py 내용이 이 파일에 통합됨)
+├── index.html                # 데스크톱 앱 UI (화면 7개, SPA)
 ├── script.js                  # 화면 전환, 측정 로직, Supabase 연동
 ├── style.css                  # 데스크톱 앱 스타일
 ├── frontend/
@@ -81,8 +83,9 @@ python main.py
 
 설정 화면에서 카메라 소스를 "Astra Pro (Depth)"로 선택하면, 웹캠 대신 Orbbec
 Astra Pro의 RGB+Depth 스트림으로 관절의 실제 3D 좌표를 계산해 더 정확한 각도를
-얻습니다. `pose3d_debug.py`가 이 경로를 전담하며, `open3d`/`openni`는 Astra Pro를
-실제로 사용할 때만 지연 import되므로 웹캠만 쓴다면 설치하지 않아도 됩니다.
+얻습니다. `main.py`에 통합된 Astra Pro 캡처 코드(구 `pose3d_debug.py`)가 이 경로를
+전담하며, `open3d`/`openni`는 Astra Pro를 실제로 사용할 때만 지연 import되므로
+웹캠만 쓴다면 설치하지 않아도 됩니다.
 
 ```bash
 pip install open3d openni
@@ -141,3 +144,5 @@ python main.py calibrate 1
 - Astra Pro는 물리 장치가 1대뿐이라 앱 내에서 이를 여는 스레드는 항상 하나로
   제한됩니다. 초기화(OpenNI2)는 최대 10초가량 걸릴 수 있으며, 이 시간이 지나도
   첫 프레임이 오지 않으면 화면에 지연 안내가 표시됩니다.
+- Astra Pro 실기기에서의 전체 플로우(초기화 → 화면 전환 반복 → 종료) 검증은
+  아직 완료되지 않았습니다. 실제 장치 보유 시 재검증이 필요합니다.
