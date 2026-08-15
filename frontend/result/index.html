@@ -354,15 +354,16 @@
 
         const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yZWhyc2t2ZWNmcmZxeGRoZnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1MzA3NTUsImV4cCI6MjEwMDEwNjc1NX0.Uj2gl4nVLrRJPGwxyJv6zmgUOWu3JuRlIVwydn9ygCw";
 
-        const THRESHOLDS = {
-            turtle: 10.0,
-            torso: 20.0,
-            shoulder: 5.0,
-            pelvis: 4.0
+        const DEFAULT_THRESHOLDS = {
+            turtle: 18.0,
+            torso: 28.0,
+            shoulder: 8.0,
+            pelvis: 7.0
         };
 
         function renderReport(data) {
             const metrics = data.result?.metrics || {};
+            const thresholds = { ...DEFAULT_THRESHOLDS, ...(data.result?.thresholds || {}) };
             const advice = data.result?.advice || "등록된 피드백이 없습니다.";
             const createdAt = data.created_at ? new Date(data.created_at).toLocaleString('ko-KR') : new Date().toLocaleString('ko-KR');
 
@@ -381,12 +382,13 @@
             const renderMetric = (valId, barId, value, threshold, goodTxt, warnTxt) => {
                 const valEl = document.getElementById(valId);
                 const barEl = document.getElementById(barId);
-                const isGood = value <= threshold;
+                const safeThreshold = Number(threshold) > 0 ? Number(threshold) : 1;
+                const isGood = value <= safeThreshold;
 
                 valEl.innerText = `${isGood ? goodTxt : warnTxt} (${value}°)`;
                 valEl.className = `metric-value ${isGood ? 'status-good-text' : 'status-warning-text'}`;
 
-                const barRatio = Math.max(10, Math.min(100, Math.round(100 - (value / (threshold * 2)) * 100)));
+                const barRatio = Math.max(10, Math.min(100, Math.round(100 - (value / (safeThreshold * 2)) * 100)));
                 barEl.className = `progress-bar-fill ${isGood ? 'fill-good' : 'fill-warning'}`;
 
                 setTimeout(() => {
@@ -394,10 +396,10 @@
                 }, 100);
             };
 
-            renderMetric('val-turtle', 'bar-turtle', metrics.turtle || 0, THRESHOLDS.turtle, '양호', '위험');
-            renderMetric('val-torso', 'bar-torso', metrics.torso || 0, THRESHOLDS.torso, '안정', '위험');
-            renderMetric('val-shoulder', 'bar-shoulder', metrics.shoulder || 0, THRESHOLDS.shoulder, '정상', '주의');
-            renderMetric('val-pelvis', 'bar-pelvis', metrics.pelvis || 0, THRESHOLDS.pelvis, '정상', '주의');
+            renderMetric('val-turtle', 'bar-turtle', metrics.turtle || 0, thresholds.turtle, '양호', '위험');
+            renderMetric('val-torso', 'bar-torso', metrics.torso || 0, thresholds.torso, '안정', '위험');
+            renderMetric('val-shoulder', 'bar-shoulder', metrics.shoulder || 0, thresholds.shoulder, '정상', '주의');
+            renderMetric('val-pelvis', 'bar-pelvis', metrics.pelvis || 0, thresholds.pelvis, '정상', '주의');
 
             document.getElementById('llm-advice').innerText = advice;
         }

@@ -172,10 +172,20 @@ async function showScreen(index, useFade = true) {
                     const anonKey = await window.pywebview.api.get_supabase_key();
                     const updateUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${currentUuid}`;
 
+                    const thresholds = {
+                        turtle: parseFloat(document.getElementById('cfg-turtle').value) || 18.0,
+                        torso: parseFloat(document.getElementById('cfg-torso').value) || 28.0,
+                        shoulder: parseFloat(document.getElementById('cfg-shoulder').value) || 8.0,
+                        pelvis: parseFloat(document.getElementById('cfg-pelvis').value) || 7.0,
+                        head: parseFloat(document.getElementById('cfg-head').value) || 5.0,
+                        spine: parseFloat(document.getElementById('cfg-spine').value) || 8.0
+                    };
+
                     const payload = {
                         result: {
                             metrics: finalReportData,
-                            advice: generatedLLMAdvice
+                            advice: generatedLLMAdvice,
+                            thresholds
                         }
                     };
 
