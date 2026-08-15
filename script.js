@@ -215,10 +215,10 @@ async function showScreen(index, useFade = true) {
             scoreNumEl.innerText = finalReportData.score;
         }
 
-        const cfgTurtle = parseFloat(document.getElementById('cfg-turtle').value) || 10.0;
-        const cfgTorso = parseFloat(document.getElementById('cfg-torso').value) || 20.0;
-        const cfgShoulder = parseFloat(document.getElementById('cfg-shoulder').value) || 5.0;
-        const cfgPelvis = parseFloat(document.getElementById('cfg-pelvis').value) || 4.0;
+        const cfgTurtle = parseFloat(document.getElementById('cfg-turtle').value) || 18.0;
+        const cfgTorso = parseFloat(document.getElementById('cfg-torso').value) || 28.0;
+        const cfgShoulder = parseFloat(document.getElementById('cfg-shoulder').value) || 8.0;
+        const cfgPelvis = parseFloat(document.getElementById('cfg-pelvis').value) || 7.0;
 
         const setMetricUI = (valId, barId, value, threshold, goodText, warnText) => {
             const valEl = document.getElementById(valId);

@@ -640,7 +640,7 @@ def run_calibration(rgb_device_index=None):
     finally:
         cam.release()
 
-def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=None, show_viewer=True, debug=False):
+def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=None, show_viewer=True, debug=False, inference_enabled=None):
 
     if not os.path.exists(CALIB_FILE):
         print(f"[Astra 캡처] 캘리브레이션 파일이 없습니다: {CALIB_FILE}")
@@ -714,43 +714,48 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
                 cv2.waitKey(1)
                 continue
 
-            aligned_depth = align_depth_to_color(depth, K_ir, dist_ir, K_rgb, R, T, rgb.shape)
-            aligned_depth = depth_persist.update(aligned_depth)
-
-            rgb_input = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-            rgb_input.flags.writeable = False
-            results = pose_model.process(rgb_input)
+            inference_active = True if inference_enabled is None else bool(inference_enabled())
 
             points3d = np.zeros((num_landmarks, 3), dtype=np.float32)
             valid = np.zeros(num_landmarks, dtype=bool)
-            h_c, w_c = aligned_depth.shape
+            results = None
 
-            if results.pose_landmarks:
-                h, w = rgb.shape[:2]
-                for i, lm in enumerate(results.pose_landmarks.landmark):
-                    if lm.visibility < 0.5:
-                        continue
-                    u, v = int(round(lm.x * w)), int(round(lm.y * h))
-                    if u < 0 or v < 0 or u >= w_c or v >= h_c:
-                        continue
-                    d = sample_depth_near(aligned_depth, u, v, max_radius=15)
-                    if d <= 0:
-                        continue
-                    p3d = backproject_point(u, v, float(d), K_rgb, dist_rgb)
-                    if p3d is not None:
-                        points3d[i] = p3d
-                        valid[i] = True
+            if inference_active:
+                aligned_depth = align_depth_to_color(depth, K_ir, dist_ir, K_rgb, R, T, rgb.shape)
+                aligned_depth = depth_persist.update(aligned_depth)
 
-            if frame_callback is not None:
-                try:
-                    disp = rgb.copy()
-                    if results.pose_landmarks:
-                        mp.solutions.drawing_utils.draw_landmarks(disp, results.pose_landmarks, connections)
+                rgb_input = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+                rgb_input.flags.writeable = False
+                results = pose_model.process(rgb_input)
 
-                    h_disp, w_disp = rgb.shape[:2]
-                    frame_callback(disp, results.pose_landmarks, w_disp, h_disp, points3d, valid)
-                except Exception:
-                    pass
+                h_c, w_c = aligned_depth.shape
+
+                if results.pose_landmarks:
+                    h, w = rgb.shape[:2]
+                    for i, lm in enumerate(results.pose_landmarks.landmark):
+                        if lm.visibility < 0.5:
+                            continue
+                        u, v = int(round(lm.x * w)), int(round(lm.y * h))
+                        if u < 0 or v < 0 or u >= w_c or v >= h_c:
+                            continue
+                        d = sample_depth_near(aligned_depth, u, v, max_radius=15)
+                        if d <= 0:
+                            continue
+                        p3d = backproject_point(u, v, float(d), K_rgb, dist_rgb)
+                        if p3d is not None:
+                            points3d[i] = p3d
+                            valid[i] = True
+
+                if frame_callback is not None:
+                    try:
+                        disp = rgb.copy()
+                        if results.pose_landmarks:
+                            mp.solutions.drawing_utils.draw_landmarks(disp, results.pose_landmarks, connections)
+
+                        h_disp, w_disp = rgb.shape[:2]
+                        frame_callback(disp, results.pose_landmarks, w_disp, h_disp, points3d, valid)
+                    except Exception:
+                        pass
 
             if show_viewer:
                 viewer.update(points3d, valid)

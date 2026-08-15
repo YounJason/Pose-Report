@@ -75,12 +75,12 @@ class CameraApp:
         self.cap = None
         self.lock = threading.Lock()
 
-        self.TURTLE_NECK_ANGLE_THRESHOLD = 10.0
-        self.TORSO_ANGLE_THRESHOLD = 20.0
-        self.SHOULDER_ANGLE_THRESHOLD = 5.0
-        self.PELVIS_ANGLE_THRESHOLD = 4.0
-        self.HEAD_TILT_ANGLE_THRESHOLD = 5.0
-        self.SPINE_LEAN_ANGLE_THRESHOLD = 8.0
+        self.TURTLE_NECK_ANGLE_THRESHOLD = 18.0
+        self.TORSO_ANGLE_THRESHOLD = 28.0
+        self.SHOULDER_ANGLE_THRESHOLD = 8.0
+        self.PELVIS_ANGLE_THRESHOLD = 7.0
+        self.HEAD_TILT_ANGLE_THRESHOLD = 7.0
+        self.SPINE_LEAN_ANGLE_THRESHOLD = 10.0
 
         self.camera_source = 'webcam'
 
@@ -145,9 +145,11 @@ class CameraApp:
         symmetry_penalty = 0
         leg_cross_penalty = 0
 
-        if neck_angle <= 10:
+        turtle_warn_threshold = self.TURTLE_NECK_ANGLE_THRESHOLD
+        turtle_severe_threshold = turtle_warn_threshold + 8.0
+        if neck_angle <= turtle_warn_threshold:
             neck_score = 1
-        elif 10 < neck_angle <= 20:
+        elif neck_angle <= turtle_severe_threshold:
             neck_score = 2
         else:
             neck_score = 3
@@ -157,9 +159,11 @@ class CameraApp:
             neck_score += 1
             status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
 
-        if torso_angle <= 5:
+        torso_warn_threshold = self.TORSO_ANGLE_THRESHOLD
+        torso_severe_threshold = torso_warn_threshold + 10.0
+        if torso_angle <= torso_warn_threshold:
             trunk_score = 1
-        elif 5 < torso_angle <= 20:
+        elif torso_angle <= torso_severe_threshold:
             trunk_score = 2
         else:
             trunk_score = 3
@@ -259,7 +263,7 @@ class CameraApp:
             return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0
 
         angle_landmarks_3d = [
-            mp_pose.PoseLandmark.NOSE, mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
+            mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
             mp_pose.PoseLandmark.LEFT_SHOULDER, mp_pose.PoseLandmark.RIGHT_SHOULDER,
             mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.RIGHT_HIP,
         ]
@@ -269,7 +273,6 @@ class CameraApp:
         def p3(lm):
             return points3d[lm.value].astype(np.float64)
 
-        nose3d = p3(mp_pose.PoseLandmark.NOSE)
         le3d = p3(mp_pose.PoseLandmark.LEFT_EAR)
         re3d = p3(mp_pose.PoseLandmark.RIGHT_EAR)
         ls3d = p3(mp_pose.PoseLandmark.LEFT_SHOULDER)
@@ -277,25 +280,29 @@ class CameraApp:
         lh3d = p3(mp_pose.PoseLandmark.LEFT_HIP)
         rh3d = p3(mp_pose.PoseLandmark.RIGHT_HIP)
 
+        mid_ear = (le3d + re3d) / 2.0
         mid_shoulder = (ls3d + rs3d) / 2.0
         mid_hip = (lh3d + rh3d) / 2.0
 
-        UP = np.array([0.0, -1.0, 0.0])
-        HORIZONTAL = np.array([1.0, 0.0, 0.0])
+        neck_vec = mid_ear - mid_shoulder
+        neck_angle = math.degrees(math.atan2(abs(neck_vec[2]), abs(neck_vec[1])))
 
-        neck_vec = nose3d - mid_shoulder
-        neck_angle = _vector_angle_deg(neck_vec, UP)
+        head_tilt_angle = math.degrees(
+            math.atan2(abs(re3d[1] - le3d[1]), abs(re3d[0] - le3d[0]))
+        ) if abs(re3d[0] - le3d[0]) > 1e-6 else 90.0
 
-        head_tilt_angle = _axis_deviation_deg(re3d - le3d, HORIZONTAL)
+        torso_vec = mid_hip - mid_shoulder
+        torso_angle = math.degrees(math.atan2(abs(torso_vec[2]), abs(torso_vec[1])))
 
-        torso_vec = mid_shoulder - mid_hip
-        torso_angle = _vector_angle_deg(torso_vec, UP)
+        spine_lean_angle = math.degrees(math.atan2(abs(torso_vec[0]), abs(torso_vec[1])))
 
-        torso_vec_xy = np.array([torso_vec[0], torso_vec[1], 0.0])
-        spine_lean_angle = _vector_angle_deg(torso_vec_xy, UP)
+        shoulder_angle = math.degrees(
+            math.atan2(abs(rs3d[1] - ls3d[1]), abs(rs3d[0] - ls3d[0]))
+        ) if abs(rs3d[0] - ls3d[0]) > 1e-6 else 90.0
 
-        shoulder_angle = _axis_deviation_deg(rs3d - ls3d, HORIZONTAL)
-        pelvis_angle = _axis_deviation_deg(rh3d - lh3d, HORIZONTAL)
+        pelvis_angle = math.degrees(
+            math.atan2(abs(rh3d[1] - lh3d[1]), abs(rh3d[0] - lh3d[0]))
+        ) if abs(rh3d[0] - lh3d[0]) > 1e-6 else 90.0
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
@@ -418,6 +425,10 @@ class CameraApp:
 
             print(f"[camera] evaluate_js 실패, 이번 프레임은 건너뜀: {e}")
 
+    def _is_camera_enabled(self):
+        with self.lock:
+            return self.camera_enabled
+
     def _on_astra_frame(self, frame, landmarks, w, h, points3d, valid):
 
         with self._debug_frame_lock:
@@ -479,6 +490,8 @@ class CameraApp:
                 "frame_callback": self._on_astra_frame,
 
                 "show_viewer": self.debug_mode_enabled,
+
+                "inference_enabled": self._is_camera_enabled,
 
                 "debug": self.debug_mode_enabled,
             },
