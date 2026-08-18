@@ -704,18 +704,67 @@ def run_calibration(rgb_device_index=None):
     finally:
         cam.release()
 
-def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=None, show_viewer=True, debug=False, inference_enabled=None):
+def preinitialize_astra_camera(rgb_device_index=None, debug=False):
+    """AstraCamera 생성과 depth 스트림 시작을 메인 스레드에서 미리 수행한다.
 
+    일부 PC(특히 데스크톱의 서드파티 USB3 컨트롤러)에서는 OpenNI2의
+    device open / create_depth_stream 호출을 메인 스레드가 아닌 스레드에서
+    수행하면 예외 없이 그대로 멈추거나 프로세스가 종료되는 문제가 있다.
+    따라서 이 함수는 webview.start() 로 메인 스레드가 이벤트 루프에
+    진입하기 전에 호출되어야 한다.
+
+    성공하면 (cam, K_rgb, dist_rgb, K_ir, dist_ir, R, T) 튜플을,
+    실패하면 None을 반환한다.
+    """
     if not os.path.exists(CALIB_FILE):
         print(f"[Astra] 캘리브레이션 파일이 없습니다: {CALIB_FILE}")
         print("[Astra] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요.")
-        return
+        return None
 
     try:
-        K_rgb, dist_rgb, K_ir, dist_ir, R, T = load_calibration(CALIB_FILE)
+        calib = load_calibration(CALIB_FILE)
     except Exception as e:
         print(f"[Astra] 캘리브레이션 파일을 불러오지 못했습니다: {e}")
-        return
+        return None
+
+    try:
+        if debug:
+            print("[Astra][진단][메인스레드] AstraCamera 생성 시작", flush=True)
+        cam = AstraCamera(
+            rgb_device_index=rgb_device_index if rgb_device_index is not None else DEFAULT_DEBUG_RGB_DEVICE_INDEX,
+            debug=debug,
+        )
+        if debug:
+            print("[Astra][진단][메인스레드] AstraCamera 생성 완료", flush=True)
+
+        if debug:
+            print("[Astra][진단][메인스레드] depth 스트림 시작", flush=True)
+        cam.start_depth()
+        if debug:
+            print("[Astra][진단][메인스레드] depth 스트림 시작 완료", flush=True)
+    except Exception as e:
+        print(f"[Astra] 메인 스레드 사전 초기화 실패: {e}")
+        return None
+
+    return (cam, *calib)
+
+
+def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=None, show_viewer=True,
+                               debug=False, inference_enabled=None, precreated=None):
+
+    if precreated is not None:
+        cam, K_rgb, dist_rgb, K_ir, dist_ir, R, T = precreated
+    else:
+        if not os.path.exists(CALIB_FILE):
+            print(f"[Astra] 캘리브레이션 파일이 없습니다: {CALIB_FILE}")
+            print("[Astra] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요.")
+            return
+
+        try:
+            K_rgb, dist_rgb, K_ir, dist_ir, R, T = load_calibration(CALIB_FILE)
+        except Exception as e:
+            print(f"[Astra] 캘리브레이션 파일을 불러오지 못했습니다: {e}")
+            return
 
     try:
         import mediapipe as mp
@@ -727,24 +776,28 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
     connections = list(mp_pose.POSE_CONNECTIONS)
     num_landmarks = 33
 
-    cam = None
     pose_model = None
     viewer = None
+    cam = precreated[0] if precreated is not None else None
     try:
-        if debug:
-            print("[Astra][진단] 1/4 AstraCamera 생성 시작", flush=True)
-        cam = AstraCamera(
-            rgb_device_index=rgb_device_index if rgb_device_index is not None else DEFAULT_DEBUG_RGB_DEVICE_INDEX,
-            debug=debug,
-        )
-        if debug:
-            print("[Astra][진단] 1/4 AstraCamera 생성 완료", flush=True)
+        if precreated is not None:
+            if debug:
+                print("[Astra][진단] 1/4 사전 생성된 AstraCamera 재사용 (메인 스레드에서 초기화됨)", flush=True)
+        else:
+            if debug:
+                print("[Astra][진단] 1/4 AstraCamera 생성 시작", flush=True)
+            cam = AstraCamera(
+                rgb_device_index=rgb_device_index if rgb_device_index is not None else DEFAULT_DEBUG_RGB_DEVICE_INDEX,
+                debug=debug,
+            )
+            if debug:
+                print("[Astra][진단] 1/4 AstraCamera 생성 완료", flush=True)
 
-        if debug:
-            print("[Astra][진단] 2/4 depth 스트림 시작", flush=True)
-        cam.start_depth()
-        if debug:
-            print("[Astra][진단] 2/4 depth 스트림 시작 완료", flush=True)
+            if debug:
+                print("[Astra][진단] 2/4 depth 스트림 시작", flush=True)
+            cam.start_depth()
+            if debug:
+                print("[Astra][진단] 2/4 depth 스트림 시작 완료", flush=True)
 
         pose_model = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
@@ -840,7 +893,9 @@ def run_debug_skeleton_viewer(stop_event, rgb_device_index=None, frame_callback=
                 pose_model.close()
             except Exception:
                 pass
-        if cam is not None:
+        if cam is not None and precreated is None:
+            # precreated 카메라는 메인 스레드에서 앱 수명 동안 유지되는
+            # 객체이므로 여기서 release 하지 않는다 (재시작 시 재사용).
             try:
                 cam.release()
             except Exception:
@@ -882,6 +937,14 @@ class CameraApp:
         # Tracks whether the frontend has already been told the camera is
         # ready to stream (used to drive the "카메라를 불러오는 중입니다" screen).
         self._camera_ready_fired = False
+
+        # Astra 카메라를 메인 스레드에서 미리 초기화해둔 결과.
+        # (cam, K_rgb, dist_rgb, K_ir, dist_ir, R, T) 튜플 또는 None.
+        # 일부 PC에서는 OpenNI2 depth stream 생성을 메인 스레드가 아닌
+        # 스레드에서 하면 멈추거나 죽기 때문에, main() 에서 webview.start()
+        # 호출 전에 preinitialize_astra_camera() 로 채워 넣는다.
+        self._astra_precreated = None
+        self._astra_precreated_idx = None
 
         raw_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
@@ -1256,6 +1319,13 @@ class CameraApp:
         self.capture_active = False
         self._stop_astra_capture()
 
+        if self._astra_precreated is not None:
+            try:
+                self._astra_precreated[0].release()
+            except Exception:
+                pass
+            self._astra_precreated = None
+
     def toggle_fullscreen(self):
         window.toggle_fullscreen()
 
@@ -1289,6 +1359,22 @@ class CameraApp:
         with self._debug_frame_lock:
             self._debug_latest_frame = None
         self._debug_first_frame_event.clear()
+
+        # 메인 스레드에서 미리 초기화해둔 카메라가 있고, 지금 요청한
+        # 인덱스와 일치하면 그걸 재사용한다 (백그라운드 스레드에서
+        # OpenNI2 device/stream을 새로 여는 것이 일부 PC에서 멈추는
+        # 문제를 피하기 위함).
+        precreated = None
+        if (self._astra_precreated is not None and
+                self._astra_precreated_idx == self.debug_cam_idx):
+            precreated = self._astra_precreated
+            print("[Astra] 사전 초기화된 카메라 재사용 (index="
+                  f"{self.debug_cam_idx})", flush=True)
+        else:
+            print("[Astra][경고] 사전 초기화된 카메라와 인덱스가 다르거나 없음. "
+                  "백그라운드 스레드에서 새로 여는 것을 시도합니다 "
+                  "(일부 PC에서 멈출 수 있음).", flush=True)
+
         self._debug_thread = threading.Thread(
             target=run_debug_skeleton_viewer,
             args=(self._debug_stop_event,),
@@ -1302,6 +1388,8 @@ class CameraApp:
                 "inference_enabled": self._is_camera_enabled,
 
                 "debug": self.debug_mode_enabled,
+
+                "precreated": precreated,
             },
             daemon=True,
         )
@@ -1340,6 +1428,25 @@ if __name__ == '__main__':
         run_calibration(rgb_device_index=cam_idx)
     else:
         app_logic = CameraApp()
+
+        # 일부 PC(특히 데스크톱의 서드파티 USB3 컨트롤러)에서는 OpenNI2의
+        # device open / create_depth_stream 호출을 메인 스레드가 아닌
+        # 스레드에서 수행하면 예외 없이 그대로 멈추거나 프로세스가
+        # 종료되는 문제가 있다. 그래서 webview.start() 가 메인 스레드의
+        # 이벤트 루프를 가져가기 전에, 여기서 미리 Astra 카메라를 열어
+        # 둔다. 캘리브레이션 파일이 없거나 Astra Pro가 연결되어 있지
+        # 않으면 조용히 None을 반환하며, 이 경우 웹캠 모드는 평소처럼
+        # 정상 동작한다.
+        preinit_idx = DEFAULT_DEBUG_RGB_DEVICE_INDEX
+        precreated = preinitialize_astra_camera(rgb_device_index=preinit_idx, debug=True)
+        if precreated is not None:
+            app_logic._astra_precreated = precreated
+            app_logic._astra_precreated_idx = preinit_idx
+            print(f"[Astra] 메인 스레드 사전 초기화 성공 (index={preinit_idx})", flush=True)
+        else:
+            print("[Astra] 메인 스레드 사전 초기화를 건너뜀 (캘리브레이션 없음/Astra 미연결/실패). "
+                  "Astra Pro 모드 선택 시 백그라운드 스레드에서 초기화를 시도합니다.", flush=True)
+
         window = webview.create_window('Pose Report', 'index.html', width=800, height=600, js_api=app_logic)
         window.events.closing += app_logic.on_closing
         threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
