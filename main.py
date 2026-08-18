@@ -78,7 +78,7 @@ FPS = 30
 
 DEFAULT_DEBUG_RGB_DEVICE_INDEX = 1
 
-OPENNI_REDIST_PATH = os.environ.get("OPENNI2_REDIST", None)
+OPENNI_REDIST_PATH = os.environ.get("OPENNI2_REDIST", r"C:\Program Files\OpenNI2\Redist")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIB_DIR = os.path.join(BASE_DIR, "calibration_data")
