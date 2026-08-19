@@ -43,6 +43,9 @@ Pose-Report/
 ├── index.html                # 데스크톱 앱 UI (화면 7개, SPA)
 ├── script.js                  # 화면 전환, 측정 로직, Supabase 연동
 ├── style.css                  # 데스크톱 앱 스타일
+├── pose_features.py           # (선택) ML 특징 벡터 추출 - 수집/학습/추론 공용
+├── collect_pose_data.py       # (선택) ML 학습용 자세 데이터 수집 스크립트
+├── train_pose_classifier.py   # (선택) RandomForest/SVM 학습 → pose_model.pkl
 ├── frontend/
 │   ├── index.html            # (별도 배포) 모바일 개인정보 동의 페이지
 │   └── result/index.html     # (별도 배포) 모바일 결과 리포트 페이지
@@ -129,6 +132,44 @@ python main.py calibrate 1
 | 상체 좌우 기울기 | 10.0° |
 
 기준 각도는 설정 화면에서 사용자가 직접 조정할 수 있습니다.
+
+## 머신러닝 분류기 (선택 사항)
+
+`if neck_angle <= 18:` 처럼 사람이 정한 각도 임계값 대신, 데이터로 학습한
+분류 모델이 자세를 직접 판별하게 할 수도 있습니다. 아래 두 스크립트로
+데이터를 모으고 모델을 학습해 `pose_model.pkl`을 만들어두면, `main.py`가
+**실행 시 이 파일을 자동으로 감지해 임계값 방식 대신 사용**합니다. 파일이
+없거나 로드에 실패하면 자동으로 기존 임계값 방식으로 동작하므로 언제든
+안전하게 켜고 끌 수 있습니다.
+
+```bash
+pip install scikit-learn joblib pandas
+
+# 1. 데이터 수집: 바른 자세/거북목/등 굽음/어깨·골반 비대칭/다리 꼬기 등
+#    자세별로 1,000~2,000 프레임씩. 숫자 키(1~6)로 지금 자세의 라벨을 고르면
+#    그 라벨로 계속 기록됩니다. (여러 사람 · 각도 · 거리에서 모을수록 좋음)
+python collect_pose_data.py --output pose_dataset.csv
+
+# 2. 학습: RandomForest / SVM(RBF)을 교차검증으로 비교해 더 좋은 쪽을
+#    pose_model.pkl 로 저장
+python train_pose_classifier.py --data pose_dataset.csv --output pose_model.pkl
+
+# 3. 실행: main.py를 (다시) 실행하면 콘솔에 모델 로드 로그가 뜨고,
+#    그때부터 자세 판정은 이 모델의 예측으로 이루어집니다.
+python main.py
+```
+
+**동작 방식**: MediaPipe가 뽑은 33개 랜드마크 `(x, y, z)`를 엉덩이 중점
+기준으로 평행이동하고 상체 길이로 나눠(`pose_features.py`) 카메라와의
+거리·체형에 덜 민감한 99차원 벡터로 만든 뒤, 분류 모델의 클래스 확률을
+얻습니다. `바른 자세(normal)`일 확률을 척추 건강 점수로, 나머지 클래스들의
+확률(15% 이상)을 상태 문구로 사용합니다. 데이터 수집·학습·실시간 추론
+세 지점 모두 `pose_features.py`의 동일한 함수를 거치므로 전처리가
+어긋나지 않습니다.
+
+새 라벨을 추가하거나 기존 라벨의 의미를 바꾸려면 `pose_features.py`의
+`POSE_LABELS` / `LABEL_TO_KOREAN`을 수정한 뒤 데이터를 다시 모아 재학습해야
+합니다.
 
 ## AI 피드백
 

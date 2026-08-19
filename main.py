@@ -12,9 +12,22 @@ import json
 import requests
 from dotenv import load_dotenv
 
+try:
+    import joblib
+except ImportError:
+    joblib = None
+
+from pose_features import extract_feature_vector, LABEL_TO_KOREAN
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
 load_dotenv(dotenv_path=env_path) if os.path.exists(env_path) else load_dotenv()
+
+# collect_pose_data.py -> train_pose_classifier.py 로 만들어지는 학습된 분류
+# 모델 경로. 이 파일이 존재하고 정상적으로 로드되면, 아래의 각도 임계값
+# (threshold) 기반 채점 대신 이 모델의 예측으로 자세 상태/점수를 계산한다.
+# 파일이 없거나 로드에 실패하면 자동으로 기존 임계값 방식으로 동작한다.
+POSE_MODEL_PATH = os.path.join(current_dir, "pose_model.pkl")
 
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
@@ -950,8 +963,39 @@ class CameraApp:
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 
+        # 머신러닝 자세 분류기 (train_pose_classifier.py 로 학습된 모델).
+        # 로드에 성공하면 self.ml_model 이 채워지고, 이후 _score_pose()가
+        # 임계값 방식 대신 이 모델을 사용하도록 자동 전환된다.
+        self.ml_model = None
+        self.ml_classes = []
+        self._load_ml_model()
+
     def get_supabase_key(self):
         return self.supabase_anon_key
+
+    def _load_ml_model(self, model_path=None):
+        """pose_model.pkl 을 로드한다. 파일이 없거나 문제가 있으면 조용히
+        건너뛰고, 이후 _score_pose()가 자동으로 임계값 방식을 사용한다."""
+        model_path = model_path or POSE_MODEL_PATH
+        if joblib is None:
+            print("[ML] joblib 이 설치되어 있지 않아 임계값(threshold) 방식으로 동작합니다. "
+                  "(pip install scikit-learn joblib)")
+            return
+        if not os.path.exists(model_path):
+            print(f"[ML] {os.path.basename(model_path)} 없음 - 임계값(threshold) 방식으로 동작합니다. "
+                  f"collect_pose_data.py / train_pose_classifier.py 로 모델을 만들면 자동 전환됩니다.")
+            return
+        try:
+            bundle = joblib.load(model_path)
+            self.ml_model = bundle["model"]
+            self.ml_classes = list(bundle["classes"])
+            print(f"[ML] {os.path.basename(model_path)} 로드 완료 "
+                  f"(모델: {bundle.get('model_name', '?')}, 클래스: {self.ml_classes}). "
+                  f"자세 판정에 이 모델을 사용합니다.")
+        except Exception as e:
+            print(f"[ML] 모델 로드 실패, 임계값(threshold) 방식으로 동작합니다: {e}")
+            self.ml_model = None
+            self.ml_classes = []
 
     def setup_and_start(self, turtle, torso, shoulder, pelvis, head, spine, camera_idx,
                          camera_source='webcam', debug_mode_enabled=False, debug_cam_idx=None):
@@ -1049,6 +1093,48 @@ class CameraApp:
         is_normal = 1 if status_text == "정상" else 0
         return status_text, is_normal, health_score
 
+    def _score_pose(self, landmarks, neck_angle, head_tilt_angle, torso_angle,
+                     spine_lean_angle, shoulder_angle, pelvis_angle, leg_cross):
+        """ML 모델이 로드되어 있으면 그 예측으로, 아니면 기존 각도 임계값
+        방식으로 (status_text, is_normal, health_score)를 계산한다."""
+        if self.ml_model is not None:
+            try:
+                return self._score_from_ml(landmarks, leg_cross)
+            except Exception as e:
+                print(f"[ML] 예측 중 오류, 이번 프레임은 임계값 방식으로 대체합니다: {e}")
+        return self._score_from_angles(
+            neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+            shoulder_angle, pelvis_angle, leg_cross
+        )
+
+    def _score_from_ml(self, landmarks, leg_cross_heuristic):
+        """학습된 분류 모델(RandomForest/SVM 등)로 33개 랜드마크 -> 자세
+        클래스 확률을 추론하고, '바른 자세'일 확률을 척추 건강 점수로,
+        그 외 클래스들의 확률을 상태 문구로 변환한다."""
+        features = extract_feature_vector(landmarks).reshape(1, -1)
+        proba = self.ml_model.predict_proba(features)[0]
+        class_proba = dict(zip(self.ml_classes, proba))
+
+        predicted_label = max(class_proba, key=class_proba.get)
+        p_normal = class_proba.get("normal", 0.0)
+
+        health_score = int(round(100 * p_normal))
+        health_score = max(0, min(100, health_score))
+
+        # 확률이 일정 수준(15%) 이상인 '문제 자세' 클래스들을 상태 문구로 표시.
+        # 임계값 방식과 달리 여러 문제가 겹쳐도 모델이 학습한 조합 그대로 반영된다.
+        status_list = [
+            f"{LABEL_TO_KOREAN.get(label, label)} ({p * 100:.0f}%)"
+            for label, p in class_proba.items()
+            if label != "normal" and p >= 0.15
+        ]
+        if leg_cross_heuristic and not any("다리 꼬기" in s for s in status_list):
+            status_list.append("다리 꼬기")
+
+        status_text = ", ".join(status_list) if status_list else "정상"
+        is_normal = 1 if (predicted_label == "normal" and not leg_cross_heuristic) else 0
+        return status_text, is_normal, health_score
+
     def _analyze_pose(self, landmarks, w, h):
 
         required_landmarks = [
@@ -1098,8 +1184,8 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
-        status_text, is_normal, health_score = self._score_from_angles(
-            neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+        status_text, is_normal, health_score = self._score_pose(
+            landmarks, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
             shoulder_angle, pelvis_angle, leg_cross
         )
         return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
@@ -1161,8 +1247,8 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
-        status_text, is_normal, health_score = self._score_from_angles(
-            neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+        status_text, is_normal, health_score = self._score_pose(
+            landmarks, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
             shoulder_angle, pelvis_angle, leg_cross
         )
         return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
