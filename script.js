@@ -5,7 +5,7 @@ let privacyPollInterval = null;
 let reportLoadingTimeout = null;
 let typingInterval = null;
 
-let timeLeft = 60;
+let timeLeft = 30;
 let isPaused = false;
 
 let debugModeEnabled = false;
@@ -142,15 +142,15 @@ async function showScreen(index, useFade = true) {
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
-        timeLeft = 60;
-        // The 60s timer stays paused until the user's sitting posture is
+        timeLeft = 30;
+        // The 30s timer stays paused until the user's sitting posture is
         // confirmed and the 3-second pre-countdown finishes (see updateFrame).
         isPaused = true;
         sittingConfirmed = false;
         hidePreCountdown();
 
         const timerEl = document.getElementById('timer');
-        timerEl.innerText = "60";
+        timerEl.innerText = "30";
 
         clearInterval(countdownInterval);
         countdownInterval = setInterval(() => {
@@ -360,7 +360,13 @@ function startCaptureLoop() {
             cameraSource === 'astra' ? "" : document.getElementById('cfg-cam').value,
             cameraSource,
             debugModeEnabled,
-            document.getElementById('cfg-debug-cam').value
+            document.getElementById('cfg-debug-cam').value,
+
+            document.getElementById('cfg-weight-neck').value,
+            document.getElementById('cfg-weight-trunk').value,
+            document.getElementById('cfg-weight-shoulder').value,
+            document.getElementById('cfg-weight-pelvis').value,
+            document.getElementById('cfg-weight-leg-cross').value
         );
     }
 }
@@ -396,7 +402,7 @@ function restartPreCountdownAnimation(numberEl) {
 }
 
 // Runs a 3-2-1 on-screen countdown after the user's seated posture is first
-// confirmed, and only resumes the 60s measurement timer once it completes.
+// confirmed, and only resumes the 30s measurement timer once it completes.
 function startPreCountdown() {
     const overlay = document.getElementById('precountdown-overlay');
     const numberEl = document.getElementById('precountdown-number');
@@ -448,7 +454,7 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
         statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
 
         // Seated posture just became detected: run the 3-second pre-countdown
-        // before the 60s measurement timer is allowed to run.
+        // before the 30s measurement timer is allowed to run.
         if (!sittingConfirmed && preCountdownTimeout === null) {
             isPaused = true;
             startPreCountdown();

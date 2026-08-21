@@ -926,12 +926,27 @@ class CameraApp:
         self.cap = None
         self.lock = threading.Lock()
 
+        # 아래 기본값들은 index.html 설정 화면(cfg-turtle 등)의 input
+        # value 속성과 반드시 동일하게 맞춘다. 프런트가 항상 자신의 DOM
+        # 값을 setup_and_start()로 넘기므로 실사용 시엔 index.html 값이
+        # 우선하지만, 여기 기본값이 다르면 문서/코드 상 혼란을 준다
+        # (과거 head=7.0/spine=10.0으로 index.html의 5.0/8.0과 어긋났던
+        # 적이 있었음 — 이제 index.html 기준으로 통일).
         self.TURTLE_NECK_ANGLE_THRESHOLD = 18.0
         self.TORSO_ANGLE_THRESHOLD = 28.0
         self.SHOULDER_ANGLE_THRESHOLD = 8.0
         self.PELVIS_ANGLE_THRESHOLD = 7.0
-        self.HEAD_TILT_ANGLE_THRESHOLD = 7.0
-        self.SPINE_LEAN_ANGLE_THRESHOLD = 10.0
+        self.HEAD_TILT_ANGLE_THRESHOLD = 5.0
+        self.SPINE_LEAN_ANGLE_THRESHOLD = 8.0
+
+        # 점수 계산 시 각 요소별 가중치. 기본값 1.0 = 기존(가중치 도입 전)
+        # 공식과 동일한 점수가 나온다. index.html 설정 화면에서 조절 가능
+        # (기본값 1.0, step 0.1). setup_and_start()가 프런트 값으로 덮어쓴다.
+        self.WEIGHT_NECK = 1.0
+        self.WEIGHT_TRUNK = 1.0
+        self.WEIGHT_SHOULDER = 1.0
+        self.WEIGHT_PELVIS = 1.0
+        self.WEIGHT_LEG_CROSS = 1.0
 
         self.camera_source = 'webcam'
 
@@ -998,7 +1013,9 @@ class CameraApp:
             self.ml_classes = []
 
     def setup_and_start(self, turtle, torso, shoulder, pelvis, head, spine, camera_idx,
-                         camera_source='webcam', debug_mode_enabled=False, debug_cam_idx=None):
+                         camera_source='webcam', debug_mode_enabled=False, debug_cam_idx=None,
+                         weight_neck=1.0, weight_trunk=1.0, weight_shoulder=1.0,
+                         weight_pelvis=1.0, weight_leg_cross=1.0):
         with self.lock:
             self.TURTLE_NECK_ANGLE_THRESHOLD = float(turtle)
             self.TORSO_ANGLE_THRESHOLD = float(torso)
@@ -1006,6 +1023,20 @@ class CameraApp:
             self.PELVIS_ANGLE_THRESHOLD = float(pelvis)
             self.HEAD_TILT_ANGLE_THRESHOLD = float(head)
             self.SPINE_LEAN_ANGLE_THRESHOLD = float(spine)
+
+            # 가중치 파라미터. 값이 없거나(None/"") 비정상이면 기존 동작과
+            # 동일하도록 1.0으로 폴백한다 (하위 호환).
+            def _to_weight(v):
+                try:
+                    return float(v) if v not in (None, "") else 1.0
+                except (TypeError, ValueError):
+                    return 1.0
+
+            self.WEIGHT_NECK = _to_weight(weight_neck)
+            self.WEIGHT_TRUNK = _to_weight(weight_trunk)
+            self.WEIGHT_SHOULDER = _to_weight(weight_shoulder)
+            self.WEIGHT_PELVIS = _to_weight(weight_pelvis)
+            self.WEIGHT_LEG_CROSS = _to_weight(weight_leg_cross)
 
             self.camera_source = (camera_source or 'webcam').strip().lower()
             if self.camera_source not in ('webcam', 'astra'):
@@ -1077,29 +1108,51 @@ class CameraApp:
         if pelvis_penalty > 0.0:
             status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
 
-        symmetry_penalty = shoulder_penalty + pelvis_penalty
-
         leg_cross_penalty = 0.0
         if leg_cross:
             leg_cross_penalty = 2.0
             status_list.append("다리 꼬기")
 
-        total_risk_score = neck_score + trunk_score + symmetry_penalty + leg_cross_penalty
+        # 요소별 가중치 적용. neck_score/trunk_score는 "위험 없음"일 때도
+        # 기준값 1.0을 갖는 누적 점수이므로, 가중치는 그 기준값을 뺀 순수
+        # 페널티 성분에만 곱한다 (그래야 가중치=1.0일 때 기존 공식과
+        # 정확히 같은 결과가 나온다). SCALE은 기존 분모 10을 그대로 유지.
+        SCALE = 10.0
+        total_weighted_penalty = (
+            (neck_score - 1.0) * self.WEIGHT_NECK
+            + (trunk_score - 1.0) * self.WEIGHT_TRUNK
+            + shoulder_penalty * self.WEIGHT_SHOULDER
+            + pelvis_penalty * self.WEIGHT_PELVIS
+            + leg_cross_penalty * self.WEIGHT_LEG_CROSS
+        )
 
-        health_score = int(round(100 - ((total_risk_score - 2) / 10 * 100)))
+        health_score = int(round(100 - (total_weighted_penalty / SCALE * 100)))
         health_score = max(0, min(100, health_score))
 
         status_text = ", ".join(status_list) if status_list else "정상"
         is_normal = 1 if status_text == "정상" else 0
         return status_text, is_normal, health_score
 
+    # ML 특징 추출을 위해 3D(Astra) 좌표를 사용할지 판단하는 최소 유효
+    # 랜드마크 개수. points3d의 valid 비율이 너무 낮으면(가려짐 등) 잡음이
+    # 섞인 3D 좌표보다는 2D 좌표로 폴백하는 편이 안전하다.
+    ML_3D_MIN_VALID_LANDMARKS = 25
+
     def _score_pose(self, landmarks, neck_angle, head_tilt_angle, torso_angle,
-                     spine_lean_angle, shoulder_angle, pelvis_angle, leg_cross):
+                     spine_lean_angle, shoulder_angle, pelvis_angle, leg_cross,
+                     points3d=None, valid=None):
         """ML 모델이 로드되어 있으면 그 예측으로, 아니면 기존 각도 임계값
-        방식으로 (status_text, is_normal, health_score)를 계산한다."""
+        방식으로 (status_text, is_normal, health_score)를 계산한다.
+
+        다리 꼬기는 ML 분류 대상이 아니라 항상 각도 기반 휴리스틱
+        (_detect_leg_cross로 계산된 leg_cross)으로 판정하며, ML/임계값 두
+        경로 모두 이 값을 동일하게 반영한다.
+
+        points3d/valid가 주어지면(Astra 3D 경로) ML 특징 추출에 실제 깊이
+        기반 3D 좌표를 사용해 웹캠 경로보다 더 정밀한 판정을 시도한다."""
         if self.ml_model is not None:
             try:
-                return self._score_from_ml(landmarks, leg_cross)
+                return self._score_from_ml(landmarks, leg_cross, points3d=points3d, valid=valid)
             except Exception as e:
                 print(f"[ML] 예측 중 오류, 이번 프레임은 임계값 방식으로 대체합니다: {e}")
         return self._score_from_angles(
@@ -1107,19 +1160,40 @@ class CameraApp:
             shoulder_angle, pelvis_angle, leg_cross
         )
 
-    def _score_from_ml(self, landmarks, leg_cross_heuristic):
+    def _score_from_ml(self, landmarks, leg_cross, points3d=None, valid=None):
         """학습된 분류 모델(RandomForest/SVM 등)로 33개 랜드마크 -> 자세
         클래스 확률을 추론하고, '바른 자세'일 확률을 척추 건강 점수로,
-        그 외 클래스들의 확률을 상태 문구로 변환한다."""
-        features = extract_feature_vector(landmarks).reshape(1, -1)
+        그 외 클래스들의 확률을 상태 문구로 변환한다.
+
+        points3d(Astra Pro depth로 역투영한 실제 3D 좌표, 미터 단위)가 충분히
+        유효하면 2D MediaPipe 랜드마크 대신 이를 특징 추출에 사용한다. 단,
+        현재 pose_model.pkl은 collect_pose_data.py로 수집한 2D 웹캠 특징으로
+        학습되었으므로, 3D 좌표를 쓰면 특징 분포(z축 스케일 등)가 달라져
+        예측 품질이 달라질 수 있다. 최상의 정확도를 위해서는 Astra Pro로
+        수집한 3D 데이터로 모델을 재학습하는 것을 권장한다 (README 참고).
+
+        다리 꼬기 판정: ML 모델은 다리 꼬기를 학습/예측하지 않는다. 대신
+        항상 기하학적 휴리스틱(_detect_leg_cross)의 결과를 인자로 받아,
+        ML이 계산한 건강 점수 위에 별도 감점으로 반영하고 상태 문구에도
+        추가한다 (_score_from_angles의 leg_cross_penalty와 동일한 크기 및
+        WEIGHT_LEG_CROSS 가중치를 사용해 두 경로의 감점 정도를 맞춘다)."""
+        use_3d = (
+            points3d is not None and valid is not None and
+            int(np.count_nonzero(valid)) >= self.ML_3D_MIN_VALID_LANDMARKS
+        )
+        if use_3d:
+            feature_source = np.asarray(points3d, dtype=np.float64)
+        else:
+            feature_source = landmarks
+
+        features = extract_feature_vector(feature_source).reshape(1, -1)
         proba = self.ml_model.predict_proba(features)[0]
         class_proba = dict(zip(self.ml_classes, proba))
 
         predicted_label = max(class_proba, key=class_proba.get)
         p_normal = class_proba.get("normal", 0.0)
 
-        health_score = int(round(100 * p_normal))
-        health_score = max(0, min(100, health_score))
+        health_score = 100 * p_normal
 
         # 확률이 일정 수준(15%) 이상인 '문제 자세' 클래스들을 상태 문구로 표시.
         # 임계값 방식과 달리 여러 문제가 겹쳐도 모델이 학습한 조합 그대로 반영된다.
@@ -1128,11 +1202,23 @@ class CameraApp:
             for label, p in class_proba.items()
             if label != "normal" and p >= 0.15
         ]
-        if leg_cross_heuristic and not any("다리 꼬기" in s for s in status_list):
+
+        # 다리 꼬기는 ML 클래스가 아니므로 각도 기반 휴리스틱 결과를 별도로
+        # 감점 및 상태 문구에 반영한다. SCALE/leg_cross_penalty 크기는
+        # _score_from_angles와 동일하게 맞춰, 임계값 방식과 ML 방식 사이에
+        # 다리 꼬기 감점 정도가 어긋나지 않도록 한다.
+        if leg_cross:
+            SCALE = 10.0
+            leg_cross_penalty = 2.0
+            health_score -= (leg_cross_penalty * self.WEIGHT_LEG_CROSS) / SCALE * 100
             status_list.append("다리 꼬기")
+            predicted_label = predicted_label if predicted_label != "normal" else "leg_cross"
+
+        health_score = int(round(health_score))
+        health_score = max(0, min(100, health_score))
 
         status_text = ", ".join(status_list) if status_list else "정상"
-        is_normal = 1 if (predicted_label == "normal" and not leg_cross_heuristic) else 0
+        is_normal = 1 if (predicted_label == "normal" and not leg_cross) else 0
         return status_text, is_normal, health_score
 
     def _analyze_pose(self, landmarks, w, h):
@@ -1249,7 +1335,8 @@ class CameraApp:
 
         status_text, is_normal, health_score = self._score_pose(
             landmarks, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
-            shoulder_angle, pelvis_angle, leg_cross
+            shoulder_angle, pelvis_angle, leg_cross,
+            points3d=points3d, valid=valid
         )
         return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
 
@@ -1258,14 +1345,14 @@ class CameraApp:
 
         prompt = f"""
         당신은 자세 교정 전문 AI 트레이너입니다.
-        사용자의 60초간 측정한 자세 데이터는 다음과 같습니다:
+        사용자의 30초간 측정한 자세 데이터는 다음과 같습니다:
 
         - 종합 자세 점수: {metrics.get('score')}점 / 100점
         - 거북목 평균 각도: {metrics.get('turtle')}° (기준치: {self.TURTLE_NECK_ANGLE_THRESHOLD}° 이하)
         - 등/허리 굽음 평균 각도: {metrics.get('torso')}° (기준치: {self.TORSO_ANGLE_THRESHOLD}° 이하)
         - 어깨 비대칭 평균 각도: {metrics.get('shoulder')}° (기준치: {self.SHOULDER_ANGLE_THRESHOLD}° 이하)
         - 골반 비대칭 평균 각도: {metrics.get('pelvis')}° (기준치: {self.PELVIS_ANGLE_THRESHOLD}° 이하)
-        - 다리 꼬기 지속 시간: 측정 60초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
+        - 다리 꼬기 지속 시간: 측정 30초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
 
         위 자세 측정 결과를 종합적으로 분석하여 사용자의 자세 습관과 문제점, 추천하는 방향을 조언하세요.
         답변은 읽기 쉽게 1문단 정도로 간결하게 한국어로 작성하세요.

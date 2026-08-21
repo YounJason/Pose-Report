@@ -99,6 +99,13 @@ p {
     margin-bottom: 10px;
 }
 
+.form-section-title {
+    margin: 16px 0 8px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #5f6368;
+}
+
 .form-group label {
     display: inline-block;
     width: 180px;
