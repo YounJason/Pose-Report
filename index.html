@@ -23,11 +23,11 @@
             <div class="form-group"><label>골반 비대칭 기준 각도</label><input type="number" id="cfg-pelvis" value="7.0" step="0.5"></div>
             <div class="form-group"><label>목 기울어짐 기준 각도</label><input type="number" id="cfg-head" value="5.0" step="0.5"></div>
             <div class="form-group"><label>상체 불균형 기준 각도</label><input type="number" id="cfg-spine" value="8.0" step="0.5"></div>
-            <h3 class="form-section-title">점수 가중치 (기본값 1.0)</h3>
-            <div class="form-group"><label>목 가중치</label><input type="number" id="cfg-weight-neck" value="1.0" step="0.1" min="0"></div>
-            <div class="form-group"><label>등 가중치</label><input type="number" id="cfg-weight-trunk" value="1.0" step="0.1" min="0"></div>
-            <div class="form-group"><label>어깨 가중치</label><input type="number" id="cfg-weight-shoulder" value="1.0" step="0.1" min="0"></div>
-            <div class="form-group"><label>골반 가중치</label><input type="number" id="cfg-weight-pelvis" value="1.0" step="0.1" min="0"></div>
+            <h3 class="form-section-title">종합 점수 가중치 (RULA 참고 기본값)</h3>
+            <div class="form-group"><label>목 가중치</label><input type="number" id="cfg-weight-neck" value="25" step="0.1" min="0"></div>
+            <div class="form-group"><label>등 가중치</label><input type="number" id="cfg-weight-trunk" value="30" step="0.1" min="0"></div>
+            <div class="form-group"><label>어깨 가중치</label><input type="number" id="cfg-weight-shoulder" value="30" step="0.1" min="0"></div>
+            <div class="form-group"><label>골반 가중치</label><input type="number" id="cfg-weight-pelvis" value="15" step="0.1" min="0"></div>
             <div class="form-group"><label>다리 꼬기 가중치</label><input type="number" id="cfg-weight-leg-cross" value="1.0" step="0.1" min="0"></div>
             <div class="form-group" id="cfg-source-group">
                 <label>카메라 소스</label>
@@ -97,7 +97,7 @@
                         <div class="metrics-list">
                             <div class="metric-item">
                                 <div class="metric-label">
-                                    <span>거북목 위험도</span>
+                                    <span>거북목 안정도</span>
                                     <span class="metric-value" id="val-turtle">-</span>
                                 </div>
                                 <div class="progress-bar-bg">

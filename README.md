@@ -1,67 +1,64 @@
 # Pose-Report
 
-카메라 앞에서 60초간 자세를 측정해 거북목 · 등 굽음 · 어깨/골반 비대칭 · 다리 꼬기를
-점수화하고, Gemini API로 코칭 피드백을 생성한 뒤 QR 코드로 연결된 모바일 리포트
-페이지에서 결과를 확인할 수 있는 [pywebview](https://pywebview.flowrl.com/) 기반
-데스크톱 앱입니다.
+카메라 앞에서 30초간 자세를 측정해 거북목 · 등/허리 · 어깨 · 골반을 점수화하고,
+다리 꼬기는 별도의 기하학적 휴리스틱으로 감지합니다. 측정 결과는 Gemini API로 코칭
+피드백을 생성한 뒤 QR 코드로 연결된 모바일 리포트 페이지에서 확인할 수 있는
+[pywebview](https://pywebview.flowrl.com/) 기반 데스크톱 앱입니다.
 
 ## 주요 기능
 
 - **실시간 자세 분석**: MediaPipe Pose로 신체 랜드마크를 추출해 프레임마다 자세를 채점
-- **두 가지 카메라 소스**
-  - **일반 웹캠**: 2D 랜드마크(x, y, 상대 z)로 각도를 근사 계산
-  - **Orbbec Astra Pro (RGB-Depth)**: RGB + Depth를 정합해 관절의 실제 3D 좌표로
-    더 정밀하게 각도를 계산 (최초 1회 스테레오 캘리브레이션 필요)
-- **점진적 채점**: 기준 각도를 얼마나 크게 벗어났는지에 비례해 점수가 연속적으로
-  낮아지는 방식 (특정 구간에서 점수가 멈추지 않음)
-- **다리 꼬기 감지**: 60초 측정 동안 다리를 꼰 시간(초)을 함께 집계해 AI 피드백에 반영
-- **AI 코칭 피드백**: Google Gemini API로 측정 결과를 바탕으로 한 자연어 피드백 생성
-- **모바일 연동**: QR 코드로 개인정보 수집 동의 → 측정 → 모바일에서 결과 확인까지
-  이어지는 흐름 (Supabase로 동의/결과 데이터 동기화)
+- **부위별 독립 ML 분류기**: 목/머리, 등/허리, 어깨, 골반에 대해 각각 독립적인 binary classifier를 사용
+- **구조적 shortcut learning 방지**: 각 분류기는 자기 부위에 해당하는 landmark subset만 입력으로 받음
+- **부위별 안전 fallback**: 모델이 없거나 로드/추론에 실패한 부위만 angle threshold 방식으로 자동 전환
+- **그룹 단위 학습 분리**: `person_id`를 기준으로 train / validation / test를 분리해 사람 단위 데이터 누수를 방지
+- **RULA 참고 가중 종합점수**: 프로젝트용 heuristic weighting으로 목 25 / 몸통 30 / 어깨 30 / 골반 15를 기본값으로 사용
+- **다리 꼬기 휴리스틱 유지**: ML 학습 대상이 아니며 기존 선분 교차 기반 판정을 종합점수에 별도 감점으로 반영
+- **ML 기반 상세 리포트**: 리포트의 4개 progress bar와 값은 프레임별 ML/fallback 점수 평균을 사용
+- **feature importance 진단**: 4개 부위 모델의 주요 feature를 모델별로 출력하는 진단 스크립트 제공
+- **Astra Pro 지원**: 기존 RGB + Depth / 3D skeleton 경로를 유지하며, 부위별 ML feature에도 가능한 경우 3D 좌표를 사용
 
 ## 화면 구성
 
 앱은 `index.html`의 `.screen` 7개를 `showScreen(index)`로 전환하는 SPA 구조입니다.
 
-| index | id | 화면 |
-|---|---|---|
-| 0 | `screen-1` | 초기 설정 (기준 각도, 카메라 소스, 디버그 모드) |
-| 1 | `screen-camera-loading` | 카메라 로딩 대기 — **여기 진입 시 카메라 캡처 루프(3D 카메라 로드)가 시작되고, 첫 프레임이 도착하면 자동으로 메인 화면으로 전환됩니다** |
-| 2 | `screen-2` | 메인 화면 ("시작하기") |
-| 3 | `screen-3` | QR 개인정보 동의 (모바일 스캔 대기) |
-| 4 | `screen-4` | 60초 측정 (카메라 프리뷰 + 실시간 점수). 착석이 확인되면 3초 카운트다운 후 타이머가 시작됩니다 |
-| 5 | `screen-5` | 리포트 생성 중 (AI 피드백 요청 + 업로드) |
-| 6 | `screen-6` | 최종 리포트 (점수, 세부 항목, AI 피드백, 다운로드용 QR) |
+| index | 화면 |
+|---|---|
+| 0 | 초기 설정 |
+| 1 | 카메라 로딩 |
+| 2 | 메인 화면 |
+| 3 | QR 개인정보 동의 |
+| 4 | 30초 측정 |
+| 5 | 리포트 생성 |
+| 6 | 최종 리포트 |
 
 ## 파일 구조
 
-```
+```text
 Pose-Report/
-├── main.py                  # pywebview 진입점, CameraApp(js_api): 자세 분석/점수 계산/Gemini 호출
-│                              #   + Astra Pro 캡처, 3D 역투영, 스테레오 캘리브레이션, Open3D 뷰어
-│                              #   (구 pose3d_debug.py 내용이 이 파일에 통합됨)
-├── index.html                # 데스크톱 앱 UI (화면 7개, SPA)
-├── script.js                  # 화면 전환, 측정 로직, Supabase 연동
-├── style.css                  # 데스크톱 앱 스타일
-├── pose_features.py           # (선택) ML 특징 벡터 추출 - 수집/학습/추론 공용
-├── collect_pose_data.py       # (선택) ML 학습용 자세 데이터 수집 스크립트
-├── train_pose_classifier.py   # (선택) RandomForest/SVM 학습 → pose_model.pkl
-├── frontend/
-│   ├── index.html            # (별도 배포) 모바일 개인정보 동의 페이지
-│   └── result/index.html     # (별도 배포) 모바일 결과 리포트 페이지
+├── main.py
+├── index.html
+├── script.js
+├── style.css
+├── pose_features.py
+├── collect_pose_data.py
+├── train_pose_classifier.py
+├── diagnose_feature_importance.py
+├── models/
+│   └── (학습 후 4개 .joblib + training_manifest.json 생성)
 └── README.md
 ```
 
-> `frontend/` 아래 두 HTML은 데스크톱 앱과 별개로 Netlify 등에 독립 배포되는
-> 웹페이지입니다. Supabase 테이블(`main`)을 매개로만 데스크톱 앱과 연결됩니다.
+`frontend/` 아래 파일은 이 프로젝트의 이번 개편 대상에서 제외합니다.
 
 ## 설치
 
 ```bash
 pip install opencv-python mediapipe==0.10.9 pywebview numpy requests python-dotenv
+pip install scikit-learn joblib pandas
 ```
 
-Python 3.11.7 기준으로 개발/테스트되었습니다.
+Python 3.11.x 환경을 기준으로 작성되었습니다.
 
 ### 환경 변수 (`.env`)
 
@@ -72,163 +69,207 @@ GEMINI_API_KEY=여기에_Gemini_API_키
 SUPABASE_ANON_KEY=여기에_Supabase_anon_key
 ```
 
-- `GEMINI_API_KEY`: AI 피드백 생성(`gemini-3.1-flash-lite`)에 사용됩니다.
-- `SUPABASE_ANON_KEY`: QR 동의 확인 및 리포트 업로드에 사용되는 Supabase 프로젝트의
-  anon key입니다. Supabase 프로젝트 URL은 `script.js`에 하드코딩되어 있습니다.
-
-### 실행
+## 실행
 
 ```bash
 python main.py
 ```
 
-## Astra Pro (3D Depth) 모드
+## 데이터 수집: 기존 UI/라벨 방식 유지
 
-설정 화면에서 카메라 소스를 "Astra Pro (Depth)"로 선택하면, 웹캠 대신 Orbbec
-Astra Pro의 RGB+Depth 스트림으로 관절의 실제 3D 좌표를 계산해 더 정확한 각도를
-얻습니다. `main.py`에 통합된 Astra Pro 캡처 코드(구 `pose3d_debug.py`)가 이 경로를
-전담하며, `open3d`/`openni`는 Astra Pro를 실제로 사용할 때만 지연 import되므로
-웹캠만 쓴다면 설치하지 않아도 됩니다.
+데이터 수집 UI는 기존과 동일하게 숫자 키 1~5를 사용합니다.
 
-```bash
-pip install open3d openni
+```text
+1 : normal
+2 : turtle_neck
+3 : slouch
+4 : shoulder_tilt
+5 : pelvis_tilt
+space : 일시정지
+q : 종료
 ```
 
-추가로 OpenNI2 SDK(redist)를 설치하고 `OPENNI2_REDIST` 환경 변수로 그 경로를
-지정해야 합니다.
+사람 단위 누수를 막기 위해 수집 실행마다 `person_id`를 지정해야 하며,
+`session_id`는 실행마다 자동 생성됩니다.
 
-### 캘리브레이션 (Astra Pro 사용 시 최초 1회 필수)
+```bash
+python collect_pose_data.py --output pose_dataset.csv --person-id person_001
+```
+
+`--person-id`를 생략하면 실행 중 터미널에서 입력받습니다.
+
+```bash
+python collect_pose_data.py --output pose_dataset.csv
+```
+
+CSV에는 기존 `source_label`과 함께 다음 4개의 이진 target이 저장됩니다.
+
+```text
+neck_label
+ torso_label
+shoulder_label
+pelvis_label
+```
+
+예를 들어 `turtle_neck`으로 수집한 행은 `neck_label=1`, 나머지는 0입니다.
+`normal`은 네 target이 모두 0입니다. 따라서 하나의 공통 CSV를 유지하면서도
+학습 시에는 네 개의 독립 binary dataset으로 해석할 수 있습니다.
+
+`session_id`, `person_id`, `frame_id`도 함께 저장됩니다. 같은 사람의 여러 세션은
+같은 `person_id`를 사용하고, 실행마다 새로운 `session_id`가 생깁니다.
+
+## 부위별 feature 설계
+
+각 classifier는 전체 33개 landmark를 입력하지 않습니다.
+
+| 분류기 | 입력 landmark |
+|---|---|
+| neck | nose, left/right eye, left/right ear, left/right shoulder |
+| torso | left/right shoulder, left/right hip |
+| shoulder | left/right shoulder, left/right elbow |
+| pelvis | left/right hip, left/right knee |
+
+각 부위 feature는 해당 부위의 anchor와 scale을 사용해 독립적으로 정규화합니다.
+학습/추론은 모두 `pose_features.py`의 동일한 함수로 처리합니다.
+
+## 모델 학습
+
+```bash
+python train_pose_classifier.py --data pose_dataset.csv --output-dir models
+```
+
+학습 후에는 다음 파일이 생성됩니다.
+
+```text
+models/
+├── neck_classifier.joblib
+├── torso_classifier.joblib
+├── shoulder_classifier.joblib
+├── pelvis_classifier.joblib
+└── training_manifest.json
+```
+
+### 학습 안전장치
+
+단순 `train_test_split`을 사용하지 않고 `person_id`를 group으로 사용합니다.
+
+1. 전체 데이터를 사람 단위로 train / validation / test로 분리
+2. train 세트 내부에서 `GroupKFold`로 후보 모델 비교
+3. RandomForest와 SVM(RBF)을 비교한 뒤 각 부위에서 더 좋은 모델 선택
+4. validation / test 성능과 confusion matrix를 기록
+5. `training_manifest.json`에 사용된 사람 그룹과 모델 성능을 저장
+
+사람 수가 3명 미만이면 안전을 위해 학습을 중단합니다. 기존에 사람 구분 정보가
+없는 구형 CSV는 강제로 학습하지 않고 새 수집 방식으로 다시 수집하도록 안내합니다.
+
+## 실시간 ML 점수 계산
+
+각 부위 모델은 binary class를 사용합니다.
+
+```text
+0 = 정상
+1 = 해당 부위 문제
+```
+
+모델의 확률과 binary prediction을 함께 사용해 다음 범위로 점수를 매핑합니다.
+
+```text
+정상 prediction  → 90~100점
+문제 prediction  → 0~89점
+```
+
+즉 확률을 단순히 `normal_probability * 100`으로 쓰지 않고, 모델이 어느 클래스를
+실제로 선택했는지와 0.5 기준선에서 얼마나 떨어져 있는지를 함께 반영합니다.
+
+리포트의 4개 metric은 다음 값을 프레임별로 수집한 뒤 평균냅니다.
+
+```text
+neck_score
+ torso_score
+shoulder_score
+pelvis_score
+```
+
+각 metric에는 내부적으로 `ml` 또는 `threshold` source도 함께 기록합니다.
+모델이 없는 부위는 다른 부위의 ML 사용 여부와 무관하게 그 부위만 threshold fallback이 됩니다.
+
+## Threshold fallback
+
+ML 모델이 없거나 로드/추론에 실패하면 해당 부위는 기존 각도 기반 threshold를 사용합니다.
+Fallback 점수도 0~100 공통 스케일로 계산하고, 정상 영역은 90~100, 문제 영역은 0~89로
+표현되도록 맞춥니다.
+
+따라서 실행 중 모델 상태가 다음과 같아도 정상 동작합니다.
+
+```text
+neck     → ML
+ torso   → ML
+shoulder → threshold fallback
+pelvis   → ML
+```
+
+## 종합 점수 가중치
+
+RULA는 부위별 raw score를 단순 가중평균하는 공식 체계가 아니므로, 본 프로젝트에서는
+RULA의 신체 부위 평가 우선순위를 참고한 heuristic weighting을 사용합니다.
+공식 RULA 가중치로 해석하면 안 되며, 프로젝트 설정용 기본값입니다.
+
+| 부위 | 기본 가중치 |
+|---|---:|
+| 목 | 25 |
+| 등/허리(몸통) | 30 |
+| 어깨 | 30 |
+| 골반 | 15 |
+
+프레임별 종합점수는 위 4개 점수의 가중평균으로 계산합니다.
+다리 꼬기가 감지된 프레임에는 기존 휴리스틱 감점을 별도로 적용합니다.
+
+## 다리 꼬기
+
+다리 꼬기는 ML feature/label에 포함하지 않습니다.
+`main.py`의 기존 선분 교차 기반 `_detect_leg_cross()` 결과를 그대로 사용하며,
+ML 사용 여부와 관계없이 종합점수에 동일한 별도 감점을 적용합니다.
+측정 결과에는 다리 꼬기 지속 시간도 함께 기록합니다.
+
+## Feature importance 진단
+
+```bash
+python diagnose_feature_importance.py --model-dir models --top 10
+```
+
+RandomForest는 내장 `feature_importances_`를, 선형 계열 모델은 가능한 경우 `coef_` 기반
+절대 영향도를 출력합니다. SVM(RBF)의 경우 직접적인 feature importance가 없으므로
+추후 별도의 permutation importance 분석을 권장합니다.
+
+## Astra Pro (3D Depth)
+
+기존 Astra Pro 캡처/캘리브레이션 경로는 그대로 유지합니다. ML 추론 시 유효한 3D landmark가
+충분하면 3D 좌표를 부위별 feature 생성에 사용하고, 부족하면 기존 2D landmark를 사용합니다.
+
+캘리브레이션:
 
 ```bash
 python main.py calibrate
-# 디버그 카메라 장치 인덱스를 직접 지정하려면
-python main.py calibrate 1
 ```
-
-캘리브레이션 결과는 `calibration_data/stereo_calibration.json`에 저장됩니다.
-이 파일이 없으면 Astra Pro 경로는 자동으로 비활성화되고(에러 없이 스킵), 웹캠
-경로는 그대로 사용할 수 있습니다.
-
-### 디버그 모드 (3D 스켈레톤 뷰어)
-
-설정 화면에서 "디버그 모드"를 켜면(Astra Pro 선택 시에만 노출), 측정 중 Open3D
-창에 3D 스켈레톤을 추가로 띄워줍니다. 순수 부가 시각화이며 꺼도 측정 자체에는
-영향이 없습니다.
-
-## 점수 계산 방식
-
-각 항목(거북목/등 굽음/목 기울어짐/상체 불균형/어깨 비대칭/골반 비대칭)은 설정
-화면에서 지정한 기준 각도를 얼마나 초과했는지에 **비례해 연속적으로** 감점되며,
-다리 꼬기가 감지되면 별도로 감점됩니다. 모든 항목의 감점을 합산해 0~100점
-사이의 종합 점수로 환산합니다. 기준 각도 이내면 100점입니다.
-
-| 기준 | 기본값 |
-|---|---|
-| 거북목 | 18.0° |
-| 등 굽음 | 28.0° |
-| 어깨 비대칭 | 8.0° |
-| 골반 비대칭 | 7.0° |
-| 목 기울어짐 | 5.0° |
-| 상체 좌우 기울기 | 8.0° |
-
-기준 각도는 설정 화면에서 사용자가 직접 조정할 수 있습니다.
-
-### 요소별 가중치
-
-목/등/어깨/골반/다리 꼬기, 다섯 요소는 각각 감점에 곱해지는 **가중치**를
-가지며, 설정 화면의 "점수 가중치" 항목에서 조정할 수 있습니다.
-
-| 가중치 | 대상 | 기본값 |
-|---|---|---|
-| `WEIGHT_NECK` | 거북목 + 목 기울어짐 | 1.0 |
-| `WEIGHT_TRUNK` | 등 굽음 + 상체 좌우 기울기 | 1.0 |
-| `WEIGHT_SHOULDER` | 어깨 비대칭 | 1.0 |
-| `WEIGHT_PELVIS` | 골반 비대칭 | 1.0 |
-| `WEIGHT_LEG_CROSS` | 다리 꼬기 | 1.0 |
-
-모든 가중치가 기본값 1.0이면 가중치 도입 이전과 정확히 같은 점수가
-계산됩니다. 특정 요소를 더(또는 덜) 중요하게 보고 싶다면 해당 가중치를
-1.0보다 크게(또는 작게) 조정하세요 — 예를 들어 거북목을 특히 엄격하게
-평가하고 싶다면 `WEIGHT_NECK`을 2.0으로 올리면 목 관련 감점이 2배로
-반영됩니다. 값을 0으로 두면 해당 요소는 점수 계산에서 완전히 제외됩니다
-(단, 상태 문구 표시에는 계속 나타납니다).
-
-## 머신러닝 분류기 (선택 사항)
-
-`if neck_angle <= 18:` 처럼 사람이 정한 각도 임계값 대신, 데이터로 학습한
-분류 모델이 자세를 직접 판별하게 할 수도 있습니다. 아래 두 스크립트로
-데이터를 모으고 모델을 학습해 `pose_model.pkl`을 만들어두면, `main.py`가
-**실행 시 이 파일을 자동으로 감지해 임계값 방식 대신 사용**합니다. 파일이
-없거나 로드에 실패하면 자동으로 기존 임계값 방식으로 동작하므로 언제든
-안전하게 켜고 끌 수 있습니다.
-
-```bash
-pip install scikit-learn joblib pandas
-
-# 1. 데이터 수집: 바른 자세/거북목/등 굽음/어깨·골반 비대칭 등 자세별로
-#    1,000~2,000 프레임씩. 숫자 키(1~5)로 지금 자세의 라벨을 고르면
-#    그 라벨로 계속 기록됩니다. (여러 사람 · 각도 · 거리에서 모을수록 좋음)
-#    다리 꼬기는 이 분류 대상에 포함되지 않습니다 (아래 참고).
-python collect_pose_data.py --output pose_dataset.csv
-
-# 2. 학습: RandomForest / SVM(RBF)을 교차검증으로 비교해 더 좋은 쪽을
-#    pose_model.pkl 로 저장
-python train_pose_classifier.py --data pose_dataset.csv --output pose_model.pkl
-
-# 3. 실행: main.py를 (다시) 실행하면 콘솔에 모델 로드 로그가 뜨고,
-#    그때부터 자세 판정은 이 모델의 예측으로 이루어집니다.
-python main.py
-```
-
-**동작 방식**: MediaPipe가 뽑은 33개 랜드마크 `(x, y, z)`를 엉덩이 중점
-기준으로 평행이동하고 상체 길이로 나눠(`pose_features.py`) 카메라와의
-거리·체형에 덜 민감한 99차원 벡터로 만든 뒤, 분류 모델의 클래스 확률을
-얻습니다. `바른 자세(normal)`일 확률을 척추 건강 점수로, 나머지 클래스들의
-확률(15% 이상)을 상태 문구로 사용합니다. 데이터 수집·학습·실시간 추론
-세 지점 모두 `pose_features.py`의 동일한 함수를 거치므로 전처리가
-어긋나지 않습니다.
-
-- **Astra Pro(3D) 사용 시**: 랜드마크 33개 중 25개 이상에 유효한 깊이 기반
-  3D 좌표(`points3d`)가 있으면, 2D 랜드마크 대신 이 실측 3D 좌표로 특징
-  벡터를 만들어 예측합니다. 유효 개수가 부족하면(가려짐 등) 자동으로 2D
-  좌표로 폴백합니다. 단, 현재 배포되는 `pose_model.pkl`은
-  `collect_pose_data.py`(웹캠, 2D)로 모은 데이터로 학습되어 있으므로, 3D
-  좌표를 쓰면 z축 스케일이 달라져 예측 품질이 달라질 수 있습니다. Astra
-  Pro 환경에서 최상의 정확도를 원한다면 Astra Pro로 수집한 3D 데이터로
-  모델을 재학습하는 것을 권장합니다.
-- **데이터 수집 시 좌우 반전 주의**: `collect_pose_data.py`는 `main.py`의
-  실시간 캡처 루프와 동일하게 프레임을 좌우 반전(flip)하지 않고 원본
-  그대로 사용합니다. 수집과 추론의 좌우 반전 여부가 다르면 어깨/골반
-  비대칭처럼 좌우 방향성이 있는 라벨의 의미가 뒤바뀌므로, 두 지점의
-  flip 여부를 항상 동일하게 유지해야 합니다.
-
-새 라벨을 추가하거나 기존 라벨의 의미를 바꾸려면 `pose_features.py`의
-`POSE_LABELS` / `LABEL_TO_KOREAN`을 수정한 뒤 데이터를 다시 모아 재학습해야
-합니다.
-
-**다리 꼬기 판정 방식**: 다리 꼬기는 ML 분류 대상이 아닙니다. `pose_features.py`의
-`POSE_LABELS`에 포함되지 않으며, `collect_pose_data.py`로 수집하지도,
-`train_pose_classifier.py`로 학습하지도 않습니다. ML 모델 사용 여부와
-무관하게 `main.py`는 항상 기하학적 휴리스틱(`_detect_leg_cross`, 다리
-선분 교차 판정)으로만 다리 꼬기를 판정하며, 이 결과가 임계값 방식에서는
-`_score_from_angles`의 감점으로, ML 방식에서는 ML이 계산한 점수 위에
-동일한 크기의 별도 감점으로 반영됩니다(둘 다 `WEIGHT_LEG_CROSS` 가중치
-적용). 화면과 최종 리포트에 표시되는 "다리 꼬기 지속 시간(초)" 집계도
-같은 휴리스틱 결과를 사용합니다.
 
 ## AI 피드백
 
-측정 종료 후 종합 점수, 항목별 평균 각도, 다리 꼬기 지속 시간(초)을 Gemini에
-전달해 자세 습관에 대한 한국어 피드백을 생성합니다. 생성된 피드백은 화면에
-표시되는 동시에 Supabase에 업로드되어 QR로 스캔한 모바일 리포트 페이지에서도
-확인할 수 있습니다.
+측정 종료 후 종합 점수, 4개 ML/threshold metric, 다리 꼬기 지속 시간을 Gemini에 전달해
+한국어 코칭 피드백을 생성합니다. metric은 더 이상 angle threshold 값을 리포트의 주 값으로
+사용하지 않고, 부위별 ML score를 중심으로 전달합니다.
 
 ## 알려진 제한사항
 
-- 다리 꼬기 지속 시간은 실제 초 단위 타임스탬프 누적이 아니라, 60초 측정 동안
-  인식된 프레임 중 다리를 꼰 프레임의 비율을 60초에 곱해 근사한 값입니다.
-- Astra Pro는 물리 장치가 1대뿐이라 앱 내에서 이를 여는 스레드는 항상 하나로
-  제한됩니다. 초기화(OpenNI2)는 최대 10초가량 걸릴 수 있으며, 이 시간이 지나도
-  첫 프레임이 오지 않으면 화면에 지연 안내가 표시됩니다.
-- Astra Pro 실기기에서의 전체 플로우(초기화 → 화면 전환 반복 → 종료) 검증은
-  아직 완료되지 않았습니다. 실제 장치 보유 시 재검증이 필요합니다.
+- 새 binary 학습 데이터는 기존 UI의 단일 자세 라벨로 수집됩니다. 즉 동일 프레임에서 여러
+  문제를 동시에 직접 라벨링하는 UI는 추가하지 않았습니다. 내부 CSV 스키마는 네 binary target을
+  동시에 표현할 수 있도록 확장되어 있습니다.
+- 실제 모델의 예측 품질은 데이터 수와 사람/세션 다양성에 크게 좌우됩니다. 최소 3명보다 훨씬 많은
+  사람을 여러 세션에서 수집하는 것을 권장합니다.
+- Astra Pro 3D 데이터와 일반 웹캠 2D 데이터는 분포가 다르므로, 실제 사용 장치와 비슷한 방식으로
+  학습 데이터를 수집하는 것이 좋습니다.
+
+
+### CSV feature 컬럼 호환성
+`train_pose_classifier.py`는 기존 수집 CSV의 `lm0_x`, `lm0_y`, `lm0_z` 형식을 그대로 사용합니다.
+부위별 모델은 `pose_features.py`의 `PART_LANDMARKS`에 지정된 landmark 컬럼만 선택합니다.
+따라서 기존 `pose_dataset_binary_grouped.csv`처럼 원본 landmark 컬럼을 가진 CSV를 바로 학습에 사용할 수 있습니다.

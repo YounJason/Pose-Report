@@ -17,7 +17,9 @@ try:
 except ImportError:
     joblib = None
 
-from pose_features import extract_feature_vector, LABEL_TO_KOREAN
+from pose_features import (
+    LABEL_TO_KOREAN, PARTS, PART_KOREAN, extract_part_feature_vector,
+)
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
@@ -27,7 +29,8 @@ load_dotenv(dotenv_path=env_path) if os.path.exists(env_path) else load_dotenv()
 # 모델 경로. 이 파일이 존재하고 정상적으로 로드되면, 아래의 각도 임계값
 # (threshold) 기반 채점 대신 이 모델의 예측으로 자세 상태/점수를 계산한다.
 # 파일이 없거나 로드에 실패하면 자동으로 기존 임계값 방식으로 동작한다.
-POSE_MODEL_PATH = os.path.join(current_dir, "pose_model.pkl")
+POSE_MODEL_DIR = os.path.join(current_dir, "models")
+POSE_MODEL_PATHS = {part: os.path.join(POSE_MODEL_DIR, f"{part}_classifier.joblib") for part in PARTS}
 
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
@@ -942,10 +945,10 @@ class CameraApp:
         # 점수 계산 시 각 요소별 가중치. 기본값 1.0 = 기존(가중치 도입 전)
         # 공식과 동일한 점수가 나온다. index.html 설정 화면에서 조절 가능
         # (기본값 1.0, step 0.1). setup_and_start()가 프런트 값으로 덮어쓴다.
-        self.WEIGHT_NECK = 1.0
-        self.WEIGHT_TRUNK = 1.0
-        self.WEIGHT_SHOULDER = 1.0
-        self.WEIGHT_PELVIS = 1.0
+        self.WEIGHT_NECK = 25.0
+        self.WEIGHT_TRUNK = 30.0
+        self.WEIGHT_SHOULDER = 30.0
+        self.WEIGHT_PELVIS = 15.0
         self.WEIGHT_LEG_CROSS = 1.0
 
         self.camera_source = 'webcam'
@@ -978,44 +981,39 @@ class CameraApp:
         self.supabase_anon_key = raw_key.strip().replace('"', '').replace("'", "")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 
-        # 머신러닝 자세 분류기 (train_pose_classifier.py 로 학습된 모델).
-        # 로드에 성공하면 self.ml_model 이 채워지고, 이후 _score_pose()가
-        # 임계값 방식 대신 이 모델을 사용하도록 자동 전환된다.
-        self.ml_model = None
-        self.ml_classes = []
-        self._load_ml_model()
+        # 부위별 독립 이진분류기. 모델 하나가 없어도 해당 부위만 threshold fallback.
+        self.ml_models = {}
+        self._load_ml_models()
 
     def get_supabase_key(self):
         return self.supabase_anon_key
 
-    def _load_ml_model(self, model_path=None):
-        """pose_model.pkl 을 로드한다. 파일이 없거나 문제가 있으면 조용히
-        건너뛰고, 이후 _score_pose()가 자동으로 임계값 방식을 사용한다."""
-        model_path = model_path or POSE_MODEL_PATH
+    def _load_ml_models(self, model_dir=None):
+        """4개 부위 모델을 독립적으로 로드한다. 실패한 부위만 threshold fallback."""
+        self.ml_models = {}
+        model_dir = model_dir or POSE_MODEL_DIR
         if joblib is None:
-            print("[ML] joblib 이 설치되어 있지 않아 임계값(threshold) 방식으로 동작합니다. "
-                  "(pip install scikit-learn joblib)")
+            print("[ML] joblib 미설치 - 모든 부위를 threshold 방식으로 동작합니다.")
             return
-        if not os.path.exists(model_path):
-            print(f"[ML] {os.path.basename(model_path)} 없음 - 임계값(threshold) 방식으로 동작합니다. "
-                  f"collect_pose_data.py / train_pose_classifier.py 로 모델을 만들면 자동 전환됩니다.")
-            return
-        try:
-            bundle = joblib.load(model_path)
-            self.ml_model = bundle["model"]
-            self.ml_classes = list(bundle["classes"])
-            print(f"[ML] {os.path.basename(model_path)} 로드 완료 "
-                  f"(모델: {bundle.get('model_name', '?')}, 클래스: {self.ml_classes}). "
-                  f"자세 판정에 이 모델을 사용합니다.")
-        except Exception as e:
-            print(f"[ML] 모델 로드 실패, 임계값(threshold) 방식으로 동작합니다: {e}")
-            self.ml_model = None
-            self.ml_classes = []
+        for part in PARTS:
+            model_path = os.path.join(model_dir, f"{part}_classifier.joblib")
+            if not os.path.exists(model_path):
+                print(f"[ML] {part}: 모델 없음 -> threshold fallback")
+                continue
+            try:
+                bundle = joblib.load(model_path)
+                if "model" not in bundle:
+                    raise ValueError("bundle에 model이 없습니다")
+                self.ml_models[part] = bundle
+                print(f"[ML] {part}: {os.path.basename(model_path)} 로드 완료 (모델={bundle.get('model_name', '?')})")
+            except Exception as e:
+                print(f"[ML] {part}: 모델 로드 실패 -> threshold fallback: {e}")
+        print("[ML] 현재 사용 가능한 부위 모델:", ', '.join(self.ml_models.keys()) or '없음')
 
     def setup_and_start(self, turtle, torso, shoulder, pelvis, head, spine, camera_idx,
                          camera_source='webcam', debug_mode_enabled=False, debug_cam_idx=None,
-                         weight_neck=1.0, weight_trunk=1.0, weight_shoulder=1.0,
-                         weight_pelvis=1.0, weight_leg_cross=1.0):
+                         weight_neck=25.0, weight_trunk=30.0, weight_shoulder=30.0,
+                         weight_pelvis=15.0, weight_leg_cross=1.0):
         with self.lock:
             self.TURTLE_NECK_ANGLE_THRESHOLD = float(turtle)
             self.TORSO_ANGLE_THRESHOLD = float(torso)
@@ -1061,196 +1059,121 @@ class CameraApp:
         if self.camera_source == 'astra':
             self._start_astra_capture()
 
+    @staticmethod
+    def _threshold_quality(angle, threshold, severe_gap):
+        over = float(angle) - float(threshold)
+        if over <= 0.0:
+            return 100.0, False
+        severity = max(0.0, min(1.0, over / max(1e-6, severe_gap)))
+        return 89.0 * (1.0 - severity), True
+
+    @staticmethod
+    def _binary_ml_quality(bundle, features):
+        model = bundle["model"]
+        classes = list(bundle.get("classes", getattr(model, "classes_", [0, 1])))
+        proba = model.predict_proba(features)[0]
+        class_proba = dict(zip(classes, proba))
+        p_problem = float(class_proba.get(1, 0.0))
+        p_normal = float(class_proba.get(0, 0.0))
+        predicted_problem = p_problem >= p_normal
+        if predicted_problem:
+            severity = max(0.0, min(1.0, (p_problem - 0.5) / 0.5))
+            score = 89.0 * (1.0 - severity)
+        else:
+            confidence = max(0.0, min(1.0, (p_normal - 0.5) / 0.5))
+            score = 90.0 + 10.0 * confidence
+        return float(max(0.0, min(100.0, score))), predicted_problem, p_problem
+
     def _score_from_angles(self, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
                             shoulder_angle, pelvis_angle, leg_cross):
-
         status_list = []
+        q1, p1 = self._threshold_quality(neck_angle, self.TURTLE_NECK_ANGLE_THRESHOLD, 8.0)
+        q2, p2 = self._threshold_quality(head_tilt_angle, self.HEAD_TILT_ANGLE_THRESHOLD, 5.0)
+        q_neck = min(q1, q2)
+        if p1: status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
+        if p2: status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
 
-        def graded_score(angle, warn_threshold, severe_gap):
-            over = angle - warn_threshold
-            if over <= 0.0:
-                return 1.0
-            return 1.0 + (over / severe_gap) * 2.0
+        q3, p3 = self._threshold_quality(torso_angle, self.TORSO_ANGLE_THRESHOLD, 10.0)
+        q4, p4 = self._threshold_quality(spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD, 8.0)
+        q_torso = min(q3, q4)
+        if p3: status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
+        if p4: status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
 
-        def excess_penalty(angle, threshold):
-            if threshold <= 0:
-                return 0.0
-            over = angle - threshold
-            return (over / threshold) if over > 0.0 else 0.0
+        q_shoulder, p_shoulder = self._threshold_quality(shoulder_angle, self.SHOULDER_ANGLE_THRESHOLD, 8.0)
+        q_pelvis, p_pelvis = self._threshold_quality(pelvis_angle, self.PELVIS_ANGLE_THRESHOLD, 7.0)
+        if p_shoulder: status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
+        if p_pelvis: status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
 
-        turtle_warn_threshold = self.TURTLE_NECK_ANGLE_THRESHOLD
-        turtle_severe_threshold = turtle_warn_threshold + 8.0
-        neck_score = graded_score(neck_angle, turtle_warn_threshold, 8.0)
-        if neck_angle > turtle_severe_threshold:
-            status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
-
-        head_tilt_penalty = excess_penalty(head_tilt_angle, self.HEAD_TILT_ANGLE_THRESHOLD)
-        if head_tilt_penalty > 0.0:
-            status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
-        neck_score += head_tilt_penalty
-
-        torso_warn_threshold = self.TORSO_ANGLE_THRESHOLD
-        torso_severe_threshold = torso_warn_threshold + 10.0
-        trunk_score = graded_score(torso_angle, torso_warn_threshold, 10.0)
-        if torso_angle > torso_severe_threshold:
-            status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
-
-        spine_penalty = excess_penalty(spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD)
-        if spine_penalty > 0.0:
-            status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
-        trunk_score += spine_penalty
-
-        shoulder_penalty = excess_penalty(shoulder_angle, self.SHOULDER_ANGLE_THRESHOLD)
-        if shoulder_penalty > 0.0:
-            status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
-
-        pelvis_penalty = excess_penalty(pelvis_angle, self.PELVIS_ANGLE_THRESHOLD)
-        if pelvis_penalty > 0.0:
-            status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
-
-        leg_cross_penalty = 0.0
+        metric_scores = {"neck": q_neck, "torso": q_torso, "shoulder": q_shoulder, "pelvis": q_pelvis}
+        weights = {"neck": max(0.0, self.WEIGHT_NECK), "torso": max(0.0, self.WEIGHT_TRUNK),
+                   "shoulder": max(0.0, self.WEIGHT_SHOULDER), "pelvis": max(0.0, self.WEIGHT_PELVIS)}
+        wsum = sum(weights.values()) or 1.0
+        health_score = sum(metric_scores[p] * weights[p] for p in PARTS) / wsum
         if leg_cross:
-            leg_cross_penalty = 2.0
             status_list.append("다리 꼬기")
-
-        # 요소별 가중치 적용. neck_score/trunk_score는 "위험 없음"일 때도
-        # 기준값 1.0을 갖는 누적 점수이므로, 가중치는 그 기준값을 뺀 순수
-        # 페널티 성분에만 곱한다 (그래야 가중치=1.0일 때 기존 공식과
-        # 정확히 같은 결과가 나온다). SCALE은 기존 분모 10을 그대로 유지.
-        SCALE = 10.0
-        total_weighted_penalty = (
-            (neck_score - 1.0) * self.WEIGHT_NECK
-            + (trunk_score - 1.0) * self.WEIGHT_TRUNK
-            + shoulder_penalty * self.WEIGHT_SHOULDER
-            + pelvis_penalty * self.WEIGHT_PELVIS
-            + leg_cross_penalty * self.WEIGHT_LEG_CROSS
-        )
-
-        health_score = int(round(100 - (total_weighted_penalty / SCALE * 100)))
-        health_score = max(0, min(100, health_score))
-
+            health_score -= 20.0 * max(0.0, self.WEIGHT_LEG_CROSS)
+        health_score = int(round(max(0.0, min(100.0, health_score))))
         status_text = ", ".join(status_list) if status_list else "정상"
         is_normal = 1 if status_text == "정상" else 0
-        return status_text, is_normal, health_score
+        sources = {p: "threshold" for p in PARTS}
+        return status_text, is_normal, health_score, {k: round(v, 2) for k, v in metric_scores.items()}, sources
 
-    # ML 특징 추출을 위해 3D(Astra) 좌표를 사용할지 판단하는 최소 유효
-    # 랜드마크 개수. points3d의 valid 비율이 너무 낮으면(가려짐 등) 잡음이
-    # 섞인 3D 좌표보다는 2D 좌표로 폴백하는 편이 안전하다.
     ML_3D_MIN_VALID_LANDMARKS = 25
 
-    def _score_pose(self, landmarks, neck_angle, head_tilt_angle, torso_angle,
-                     spine_lean_angle, shoulder_angle, pelvis_angle, leg_cross,
-                     points3d=None, valid=None):
-        """ML 모델이 로드되어 있으면 그 예측으로, 아니면 기존 각도 임계값
-        방식으로 (status_text, is_normal, health_score)를 계산한다.
+    def _score_pose(self, landmarks, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
+                    shoulder_angle, pelvis_angle, leg_cross, points3d=None, valid=None):
+        source = landmarks
+        if points3d is not None and valid is not None and int(np.count_nonzero(valid)) >= self.ML_3D_MIN_VALID_LANDMARKS:
+            source = np.asarray(points3d, dtype=np.float64)
 
-        다리 꼬기는 ML 분류 대상이 아니라 항상 각도 기반 휴리스틱
-        (_detect_leg_cross로 계산된 leg_cross)으로 판정하며, ML/임계값 두
-        경로 모두 이 값을 동일하게 반영한다.
+        metric_scores = {}
+        sources = {}
+        status_list = []
+        for part in PARTS:
+            bundle = self.ml_models.get(part)
+            if bundle is not None:
+                try:
+                    features = extract_part_feature_vector(source, part).reshape(1, -1)
+                    score, problem, p_problem = self._binary_ml_quality(bundle, features)
+                    metric_scores[part] = score
+                    sources[part] = "ml"
+                    if problem:
+                        status_list.append(f"{PART_KOREAN[part]} 위험 ({p_problem * 100:.0f}%)")
+                    continue
+                except Exception as e:
+                    print(f"[ML] {part}: 프레임 예측 실패 -> threshold fallback: {e}")
 
-        points3d/valid가 주어지면(Astra 3D 경로) ML 특징 추출에 실제 깊이
-        기반 3D 좌표를 사용해 웹캠 경로보다 더 정밀한 판정을 시도한다."""
-        if self.ml_model is not None:
-            try:
-                return self._score_from_ml(landmarks, leg_cross, points3d=points3d, valid=valid)
-            except Exception as e:
-                print(f"[ML] 예측 중 오류, 이번 프레임은 임계값 방식으로 대체합니다: {e}")
-        return self._score_from_angles(
-            neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
-            shoulder_angle, pelvis_angle, leg_cross
-        )
+            sources[part] = "threshold"
+            if part == "neck":
+                a, pa = self._threshold_quality(neck_angle, self.TURTLE_NECK_ANGLE_THRESHOLD, 8.0)
+                b, pb = self._threshold_quality(head_tilt_angle, self.HEAD_TILT_ANGLE_THRESHOLD, 5.0)
+                metric_scores[part] = min(a, b)
+                if pa: status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
+                if pb: status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
+            elif part == "torso":
+                a, pa = self._threshold_quality(torso_angle, self.TORSO_ANGLE_THRESHOLD, 10.0)
+                b, pb = self._threshold_quality(spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD, 8.0)
+                metric_scores[part] = min(a, b)
+                if pa: status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
+                if pb: status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
+            elif part == "shoulder":
+                metric_scores[part], prob = self._threshold_quality(shoulder_angle, self.SHOULDER_ANGLE_THRESHOLD, 8.0)
+                if prob: status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
+            else:
+                metric_scores[part], prob = self._threshold_quality(pelvis_angle, self.PELVIS_ANGLE_THRESHOLD, 7.0)
+                if prob: status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
 
-    def _score_from_ml(self, landmarks, leg_cross, points3d=None, valid=None):
-        """학습된 분류 모델(RandomForest/SVM 등)로 33개 랜드마크 -> 자세
-        클래스 확률을 추론하고, '바른 자세'일 확률을 척추 건강 점수로,
-        그 외 클래스들의 확률을 상태 문구로 변환한다.
-
-        points3d(Astra Pro depth로 역투영한 실제 3D 좌표, 미터 단위)가 충분히
-        유효하면 2D MediaPipe 랜드마크 대신 이를 특징 추출에 사용한다. 단,
-        현재 pose_model.pkl은 collect_pose_data.py로 수집한 2D 웹캠 특징으로
-        학습되었으므로, 3D 좌표를 쓰면 특징 분포(z축 스케일 등)가 달라져
-        예측 품질이 달라질 수 있다. 최상의 정확도를 위해서는 Astra Pro로
-        수집한 3D 데이터로 모델을 재학습하는 것을 권장한다 (README 참고).
-
-        다리 꼬기 판정: ML 모델은 다리 꼬기를 학습/예측하지 않는다. 대신
-        항상 기하학적 휴리스틱(_detect_leg_cross)의 결과를 인자로 받아,
-        ML이 계산한 건강 점수 위에 별도 감점으로 반영하고 상태 문구에도
-        추가한다 (_score_from_angles의 leg_cross_penalty와 동일한 크기 및
-        WEIGHT_LEG_CROSS 가중치를 사용해 두 경로의 감점 정도를 맞춘다)."""
-        use_3d = (
-            points3d is not None and valid is not None and
-            int(np.count_nonzero(valid)) >= self.ML_3D_MIN_VALID_LANDMARKS
-        )
-        if use_3d:
-            feature_source = np.asarray(points3d, dtype=np.float64)
-        else:
-            feature_source = landmarks
-
-        features = extract_feature_vector(feature_source).reshape(1, -1)
-        proba = self.ml_model.predict_proba(features)[0]
-        class_proba = dict(zip(self.ml_classes, proba))
-
-        predicted_label = max(class_proba, key=class_proba.get)
-        p_normal = class_proba.get("normal", 0.0)
-
-        # 기존에는 health_score = 100 * p_normal 이었는데, 이는 확률에
-        # 그대로 선형 비례하는 방식이라 두 가지 문제가 있었다.
-        #   1) 클래스가 5개면 "완전히 무작위로 찍은" 상태도 p_normal=0.2가
-        #      되어 20점으로 처리됨 (원래는 "판단 불가"에 가까운데 "안 좋은
-        #      자세"처럼 보임).
-        #   2) 학습 데이터가 세션 단위로 수집되어 모델이 낯선(=실사용) 입력에
-        #      과확신(overconfident)하는 경향이 있어, 실제로는 바른 자세인데
-        #      p_normal이 0.02~0.05 수준으로 튀어 2~5점 같은 극단적인 저점이
-        #      나옴.
-        #
-        # 아래 방식은 "모델이 최종적으로 어떤 클래스를 정답이라 판단했는가
-        # (predicted_label)"를 우선 기준으로 삼는다.
-        #   - predicted_label == "normal" (즉 모델이 그래도 normal을 1등으로
-        #     본 경우): 90~100점 구간에만 매핑한다. p_normal이 완벽한 1.0이
-        #     아니어도(다른 클래스와 애매하게 갈렸어도) 바른 자세로 인식된
-        #     이상 90점 밑으로는 떨어지지 않는다.
-        #   - predicted_label != "normal": 0~89점 구간에 매핑하고, 그 문제
-        #     자세로 얼마나 확신했는지(baseline=1/클래스수 대비 초과분)에
-        #     비례해 점수를 깎는다. 확신이 낮을수록(경계선에 가까울수록)
-        #     89점에 가깝게, 확신이 강할수록 0점에 가깝게 내려간다.
-        num_classes = max(1, len(self.ml_classes))
-        baseline = 1.0 / num_classes  # 클래스 5개면 0.2 ("판단 불가" 수준 기준선)
-
-        if predicted_label == "normal":
-            margin = (p_normal - baseline) / max(1e-6, 1.0 - baseline)
-            margin = max(0.0, min(1.0, margin))
-            health_score = 90.0 + 10.0 * margin
-        else:
-            p_problem = class_proba.get(predicted_label, 0.0)
-            severity = (p_problem - baseline) / max(1e-6, 1.0 - baseline)
-            severity = max(0.0, min(1.0, severity))
-            health_score = 89.0 * (1.0 - severity)
-
-        # 확률이 일정 수준(15%) 이상인 '문제 자세' 클래스들을 상태 문구로 표시.
-        # 임계값 방식과 달리 여러 문제가 겹쳐도 모델이 학습한 조합 그대로 반영된다.
-        status_list = [
-            f"{LABEL_TO_KOREAN.get(label, label)} ({p * 100:.0f}%)"
-            for label, p in class_proba.items()
-            if label != "normal" and p >= 0.15
-        ]
-
-        # 다리 꼬기는 ML 클래스가 아니므로 각도 기반 휴리스틱 결과를 별도로
-        # 감점 및 상태 문구에 반영한다. SCALE/leg_cross_penalty 크기는
-        # _score_from_angles와 동일하게 맞춰, 임계값 방식과 ML 방식 사이에
-        # 다리 꼬기 감점 정도가 어긋나지 않도록 한다.
+        weights = {"neck": max(0.0, self.WEIGHT_NECK), "torso": max(0.0, self.WEIGHT_TRUNK),
+                   "shoulder": max(0.0, self.WEIGHT_SHOULDER), "pelvis": max(0.0, self.WEIGHT_PELVIS)}
+        wsum = sum(weights.values()) or 1.0
+        health_score = sum(metric_scores[p] * weights[p] for p in PARTS) / wsum
         if leg_cross:
-            SCALE = 10.0
-            leg_cross_penalty = 2.0
-            health_score -= (leg_cross_penalty * self.WEIGHT_LEG_CROSS) / SCALE * 100
+            health_score -= 20.0 * max(0.0, self.WEIGHT_LEG_CROSS)
             status_list.append("다리 꼬기")
-            predicted_label = predicted_label if predicted_label != "normal" else "leg_cross"
-
-        health_score = int(round(health_score))
-        health_score = max(0, min(100, health_score))
-
-        status_text = ", ".join(status_list) if status_list else "정상"
-        is_normal = 1 if (predicted_label == "normal" and not leg_cross) else 0
-        return status_text, is_normal, health_score
+        health_score = int(round(max(0.0, min(100.0, health_score))))
+        status_text = ", ".join(dict.fromkeys(status_list)) if status_list else "정상"
+        is_normal = 1 if status_text == "정상" else 0
+        return status_text, is_normal, health_score, {k: round(float(v), 2) for k, v in metric_scores.items()}, sources
 
     def _analyze_pose(self, landmarks, w, h):
 
@@ -1264,7 +1187,7 @@ class CameraApp:
         ]
 
         if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False, {p: 0 for p in PARTS}, {p: "threshold" for p in PARTS}
 
         nose = landmarks[mp_pose.PoseLandmark.NOSE]
         left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
@@ -1301,11 +1224,11 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
-        status_text, is_normal, health_score = self._score_pose(
+        status_text, is_normal, health_score, metric_scores, sources = self._score_pose(
             landmarks, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
             shoulder_angle, pelvis_angle, leg_cross
         )
-        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
+        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross), metric_scores, sources
 
     def _analyze_pose_3d(self, landmarks, points3d, valid, w, h):
 
@@ -1318,7 +1241,7 @@ class CameraApp:
             mp_pose.PoseLandmark.LEFT_ANKLE, mp_pose.PoseLandmark.RIGHT_ANKLE
         ]
         if landmarks is None or any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False, {p: 0 for p in PARTS}, {p: "threshold" for p in PARTS}
 
         angle_landmarks_3d = [
             mp_pose.PoseLandmark.LEFT_EAR, mp_pose.PoseLandmark.RIGHT_EAR,
@@ -1326,7 +1249,7 @@ class CameraApp:
             mp_pose.PoseLandmark.LEFT_HIP, mp_pose.PoseLandmark.RIGHT_HIP,
         ]
         if points3d is None or valid is None or any(not valid[lm.value] for lm in angle_landmarks_3d):
-            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
+            return "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False, {p: 0 for p in PARTS}, {p: "threshold" for p in PARTS}
 
         def p3(lm):
             return points3d[lm.value].astype(np.float64)
@@ -1364,28 +1287,28 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
-        status_text, is_normal, health_score = self._score_pose(
+        status_text, is_normal, health_score, metric_scores, sources = self._score_pose(
             landmarks, neck_angle, head_tilt_angle, torso_angle, spine_lean_angle,
-            shoulder_angle, pelvis_angle, leg_cross,
-            points3d=points3d, valid=valid
+            shoulder_angle, pelvis_angle, leg_cross, points3d=points3d, valid=valid
         )
-        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross)
+        return status_text, is_normal, health_score, abs(neck_angle), abs(torso_angle), abs(shoulder_angle), abs(pelvis_angle), bool(leg_cross), metric_scores, sources
 
     def generate_llm_advice(self, metrics):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={self.gemini_api_key}"
 
         prompt = f"""
         당신은 자세 교정 전문 AI 트레이너입니다.
-        사용자의 30초간 측정한 자세 데이터는 다음과 같습니다:
+        사용자의 30초간 측정한 자세 데이터는 다음과 같습니다.
 
         - 종합 자세 점수: {metrics.get('score')}점 / 100점
-        - 거북목 평균 각도: {metrics.get('turtle')}° (기준치: {self.TURTLE_NECK_ANGLE_THRESHOLD}° 이하)
-        - 등/허리 굽음 평균 각도: {metrics.get('torso')}° (기준치: {self.TORSO_ANGLE_THRESHOLD}° 이하)
-        - 어깨 비대칭 평균 각도: {metrics.get('shoulder')}° (기준치: {self.SHOULDER_ANGLE_THRESHOLD}° 이하)
-        - 골반 비대칭 평균 각도: {metrics.get('pelvis')}° (기준치: {self.PELVIS_ANGLE_THRESHOLD}° 이하)
+        - 거북목 안정도 점수: {metrics.get('turtle')}점 / 100점
+        - 등/허리 안정도 점수: {metrics.get('torso')}점 / 100점
+        - 어깨 균형 점수: {metrics.get('shoulder')}점 / 100점
+        - 골반 균형 점수: {metrics.get('pelvis')}점 / 100점
+        - 각 항목의 산출 방식: 부위별 독립 ML 이진분류기(모델이 없는 항목은 threshold fallback)
         - 다리 꼬기 지속 시간: 측정 30초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
 
-        위 자세 측정 결과를 종합적으로 분석하여 사용자의 자세 습관과 문제점, 추천하는 방향을 조언하세요.
+        위 점수를 바탕으로 사용자의 자세 습관과 우선적으로 개선할 부분, 추천하는 행동을 조언하세요.
         답변은 읽기 쉽게 1문단 정도로 간결하게 한국어로 작성하세요.
         마크다운을 사용하지 말고 줄글로 작성하세요.
         사용자는 이미 해당 수치를 알고 있습니다. 조언만 출력하세요.
@@ -1456,10 +1379,10 @@ class CameraApp:
             landmarks = results.pose_landmarks
             if landmarks:
                 mp.solutions.drawing_utils.draw_landmarks(frame, landmarks, mp_pose.POSE_CONNECTIONS)
-                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross = self._analyze_pose(landmarks.landmark, w, h)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources = self._analyze_pose(landmarks.landmark, w, h)
             else:
-                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
-            self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross)
+                status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False, {p: 0 for p in PARTS}, {p: "threshold" for p in PARTS}
+            self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources)
 
         with self.lock:
             if self.cap:
@@ -1469,24 +1392,27 @@ class CameraApp:
     def _process_and_push_astra_frame(self, frame, landmarks, w, h, points3d, valid):
 
         if landmarks is not None and points3d is not None:
-            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross =\
+            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources =\
                 self._analyze_pose_3d(landmarks.landmark, points3d, valid, w, h)
         else:
-            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False
+            status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources = "인식되지 않음", 2, 0, 0.0, 0.0, 0.0, 0.0, False, {p: 0 for p in PARTS}, {p: "threshold" for p in PARTS}
 
-        self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross)
+        self._push_frame_to_webview(frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources)
 
-    def _push_frame_to_webview(self, frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross):
-
+    def _push_frame_to_webview(self, frame, status_text, is_normal, score, turtle_ang, torso_ang, shoulder_ang, pelvis_ang, leg_cross, metric_scores, metric_sources):
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         b64_str = base64.b64encode(buffer).decode('utf-8')
         safe_text = status_text.replace("'", "\\'")
         leg_cross_js = 'true' if leg_cross else 'false'
-
+        scores_json = json.dumps(metric_scores, ensure_ascii=False)
+        sources_json = json.dumps(metric_sources, ensure_ascii=False)
         try:
-            window.evaluate_js(f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, {turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f}, {leg_cross_js})")
+            window.evaluate_js(
+                f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, "
+                f"{turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f}, "
+                f"{leg_cross_js}, {scores_json}, {sources_json})"
+            )
         except Exception as e:
-
             print(f"[camera] evaluate_js 실패, 이번 프레임은 건너뜀: {e}")
 
     def _notify_camera_ready(self):
