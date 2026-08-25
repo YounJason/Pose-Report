@@ -1193,7 +1193,38 @@ class CameraApp:
         predicted_label = max(class_proba, key=class_proba.get)
         p_normal = class_proba.get("normal", 0.0)
 
-        health_score = 100 * p_normal
+        # 기존에는 health_score = 100 * p_normal 이었는데, 이는 확률에
+        # 그대로 선형 비례하는 방식이라 두 가지 문제가 있었다.
+        #   1) 클래스가 5개면 "완전히 무작위로 찍은" 상태도 p_normal=0.2가
+        #      되어 20점으로 처리됨 (원래는 "판단 불가"에 가까운데 "안 좋은
+        #      자세"처럼 보임).
+        #   2) 학습 데이터가 세션 단위로 수집되어 모델이 낯선(=실사용) 입력에
+        #      과확신(overconfident)하는 경향이 있어, 실제로는 바른 자세인데
+        #      p_normal이 0.02~0.05 수준으로 튀어 2~5점 같은 극단적인 저점이
+        #      나옴.
+        #
+        # 아래 방식은 "모델이 최종적으로 어떤 클래스를 정답이라 판단했는가
+        # (predicted_label)"를 우선 기준으로 삼는다.
+        #   - predicted_label == "normal" (즉 모델이 그래도 normal을 1등으로
+        #     본 경우): 90~100점 구간에만 매핑한다. p_normal이 완벽한 1.0이
+        #     아니어도(다른 클래스와 애매하게 갈렸어도) 바른 자세로 인식된
+        #     이상 90점 밑으로는 떨어지지 않는다.
+        #   - predicted_label != "normal": 0~89점 구간에 매핑하고, 그 문제
+        #     자세로 얼마나 확신했는지(baseline=1/클래스수 대비 초과분)에
+        #     비례해 점수를 깎는다. 확신이 낮을수록(경계선에 가까울수록)
+        #     89점에 가깝게, 확신이 강할수록 0점에 가깝게 내려간다.
+        num_classes = max(1, len(self.ml_classes))
+        baseline = 1.0 / num_classes  # 클래스 5개면 0.2 ("판단 불가" 수준 기준선)
+
+        if predicted_label == "normal":
+            margin = (p_normal - baseline) / max(1e-6, 1.0 - baseline)
+            margin = max(0.0, min(1.0, margin))
+            health_score = 90.0 + 10.0 * margin
+        else:
+            p_problem = class_proba.get(predicted_label, 0.0)
+            severity = (p_problem - baseline) / max(1e-6, 1.0 - baseline)
+            severity = max(0.0, min(1.0, severity))
+            health_score = 89.0 * (1.0 - severity)
 
         # 확률이 일정 수준(15%) 이상인 '문제 자세' 클래스들을 상태 문구로 표시.
         # 임계값 방식과 달리 여러 문제가 겹쳐도 모델이 학습한 조합 그대로 반영된다.
