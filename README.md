@@ -5,6 +5,10 @@
 피드백을 생성한 뒤 QR 코드로 연결된 모바일 리포트 페이지에서 확인할 수 있는
 [pywebview](https://pywebview.flowrl.com/) 기반 데스크톱 앱입니다.
 
+> 이 프로젝트는 코드에 주석을 두지 않는 방식(바이브 코딩)으로 관리합니다.
+> 로직에 대한 설명, 배경, 주의사항은 모두 이 README에 정리되어 있으니,
+> 코드를 수정하기 전에 관련 섹션을 먼저 확인하세요.
+
 ## 주요 기능
 
 - **실시간 자세 분석**: MediaPipe Pose로 신체 랜드마크를 추출해 프레임마다 자세를 채점
@@ -15,8 +19,9 @@
 - **RULA 참고 가중 종합점수**: 프로젝트용 heuristic weighting으로 목 25 / 몸통 30 / 어깨 30 / 골반 15를 기본값으로 사용
 - **다리 꼬기 휴리스틱 유지**: ML 학습 대상이 아니며 기존 선분 교차 기반 판정을 종합점수에 별도 감점으로 반영
 - **ML 기반 상세 리포트**: 리포트의 4개 progress bar와 값은 프레임별 ML/fallback 점수 평균을 사용
-- **feature importance 진단**: 4개 부위 모델의 주요 feature를 모델별로 출력하는 진단 스크립트 제공
+- **feature importance 진단**: 4개 부위 모델의 주요 feature를 모델별로 출력하는 서브커맨드 제공
 - **Astra Pro 지원**: 기존 RGB + Depth / 3D skeleton 경로를 유지하며, 부위별 ML feature에도 가능한 경우 3D 좌표를 사용
+- **Depth 조회 벡터화**: 랜드마크별 depth 최근접 탐색을 프레임당 1회의 `cv2.distanceTransform` 호출로 처리 (자세한 내용은 [Astra Pro depth 파이프라인](#astra-pro-3d-depth) 참고)
 
 ## 화면 구성
 
@@ -36,20 +41,20 @@
 
 ```text
 Pose-Report/
-├── main.py
+├── main.py          # 앱 실행 + 데이터 수집/학습/진단 서브커맨드까지 전부 포함
 ├── index.html
 ├── script.js
 ├── style.css
-├── pose_features.py
-├── collect_pose_data.py
-├── train_pose_classifier.py
-├── diagnose_feature_importance.py
 ├── models/
 │   └── (학습 후 4개 .joblib + training_manifest.json 생성)
 └── README.md
 ```
 
-`frontend/` 아래 파일은 이 프로젝트의 이번 개편 대상에서 제외합니다.
+`collect_pose_data.py`, `train_pose_classifier.py`, `diagnose_feature_importance.py`,
+`pose_features.py`는 모두 `main.py` 안으로 통합되었습니다. 각 스크립트가 하던 일은
+아래 [서브커맨드](#서브커맨드-구조) 섹션의 `python main.py <command>` 형태로 그대로 실행할 수 있습니다.
+
+`frontend/` 아래 파일은 이 프로젝트의 개편 대상에서 제외합니다.
 
 ## 설치
 
@@ -69,15 +74,29 @@ GEMINI_API_KEY=여기에_Gemini_API_키
 SUPABASE_ANON_KEY=여기에_Supabase_anon_key
 ```
 
+## 서브커맨드 구조
+
+`main.py`는 인자 없이 실행하면 pywebview 앱을 띄우고, 첫 번째 인자로 아래 서브커맨드를 받으면
+해당 오프라인 파이프라인만 실행합니다. 각 서브커맨드는 기존 개별 스크립트와 동일한 옵션을
+그대로 지원합니다.
+
+```bash
+python main.py                # 기본: pywebview 앱 실행
+python main.py calibrate [카메라 인덱스]   # Astra Pro 스테레오 캘리브레이션
+python main.py collect --output pose_dataset.csv --person-id person_001
+python main.py train --data pose_dataset.csv --output-dir models
+python main.py diagnose --model-dir models --top 10
+```
+
 ## 실행
 
 ```bash
 python main.py
 ```
 
-## 데이터 수집: 기존 UI/라벨 방식 유지
+## 데이터 수집: 기존 UI/라벨 방식 유지 (`python main.py collect`)
 
-데이터 수집 UI는 기존과 동일하게 숫자 키 1~5를 사용합니다.
+데이터 수집 UI는 숫자 키 1~5를 사용합니다.
 
 ```text
 1 : normal
@@ -93,20 +112,20 @@ q : 종료
 `session_id`는 실행마다 자동 생성됩니다.
 
 ```bash
-python collect_pose_data.py --output pose_dataset.csv --person-id person_001
+python main.py collect --output pose_dataset.csv --person-id person_001
 ```
 
 `--person-id`를 생략하면 실행 중 터미널에서 입력받습니다.
 
 ```bash
-python collect_pose_data.py --output pose_dataset.csv
+python main.py collect --output pose_dataset.csv
 ```
 
-CSV에는 기존 `source_label`과 함께 다음 4개의 이진 target이 저장됩니다.
+CSV에는 `source_label`과 함께 다음 4개의 이진 target이 저장됩니다.
 
 ```text
 neck_label
- torso_label
+torso_label
 shoulder_label
 pelvis_label
 ```
@@ -129,13 +148,14 @@ pelvis_label
 | shoulder | left/right shoulder, left/right elbow |
 | pelvis | left/right hip, left/right knee |
 
-각 부위 feature는 해당 부위의 anchor와 scale을 사용해 독립적으로 정규화합니다.
-학습/추론은 모두 `pose_features.py`의 동일한 함수로 처리합니다.
+각 부위 feature는 해당 부위의 anchor와 scale을 사용해 독립적으로 정규화합니다
+(`extract_part_feature_vector`). 실시간 추론과 학습 데이터 생성 모두 `main.py` 안의
+동일한 함수를 공유하므로 두 경로 간 feature 계산 방식이 어긋날 일이 없습니다.
 
-## 모델 학습
+## 모델 학습 (`python main.py train`)
 
 ```bash
-python train_pose_classifier.py --data pose_dataset.csv --output-dir models
+python main.py train --data pose_dataset.csv --output-dir models
 ```
 
 학습 후에는 다음 파일이 생성됩니다.
@@ -159,8 +179,8 @@ models/
 4. validation / test 성능과 confusion matrix를 기록
 5. `training_manifest.json`에 사용된 사람 그룹과 모델 성능을 저장
 
-사람 수가 3명 미만이면 안전을 위해 학습을 중단합니다. 기존에 사람 구분 정보가
-없는 구형 CSV는 강제로 학습하지 않고 새 수집 방식으로 다시 수집하도록 안내합니다.
+사람 수가 3명 미만이면 안전을 위해 학습을 중단합니다. 사람 구분 정보가 없는 구형 CSV는
+강제로 학습하지 않고 `python main.py collect`로 새 형식으로 다시 수집하도록 안내합니다.
 
 ## 실시간 ML 점수 계산
 
@@ -179,13 +199,14 @@ models/
 ```
 
 즉 확률을 단순히 `normal_probability * 100`으로 쓰지 않고, 모델이 어느 클래스를
-실제로 선택했는지와 0.5 기준선에서 얼마나 떨어져 있는지를 함께 반영합니다.
+실제로 선택했는지와 0.5 기준선에서 얼마나 떨어져 있는지를 함께 반영합니다
+(`CameraApp._binary_ml_quality`).
 
 리포트의 4개 metric은 다음 값을 프레임별로 수집한 뒤 평균냅니다.
 
 ```text
 neck_score
- torso_score
+torso_score
 shoulder_score
 pelvis_score
 ```
@@ -195,18 +216,27 @@ pelvis_score
 
 ## Threshold fallback
 
-ML 모델이 없거나 로드/추론에 실패하면 해당 부위는 기존 각도 기반 threshold를 사용합니다.
-Fallback 점수도 0~100 공통 스케일로 계산하고, 정상 영역은 90~100, 문제 영역은 0~89로
-표현되도록 맞춥니다.
+ML 모델이 없거나 로드/추론에 실패하면 해당 부위는 기존 각도 기반 threshold를 사용합니다
+(`CameraApp._threshold_quality`). Fallback 점수도 0~100 공통 스케일로 계산하고, 정상 영역은
+90~100, 문제 영역은 0~89로 표현되도록 맞춥니다.
 
 따라서 실행 중 모델 상태가 다음과 같아도 정상 동작합니다.
 
 ```text
 neck     → ML
- torso   → ML
+torso    → ML
 shoulder → threshold fallback
 pelvis   → ML
 ```
+
+### 임계값/가중치 기본값과 index.html 동기화 주의
+
+`CameraApp.__init__`의 각도 threshold와 가중치 기본값(`TURTLE_NECK_ANGLE_THRESHOLD`,
+`WEIGHT_NECK` 등)은 `index.html` 설정 화면의 input `value` 속성과 항상 동일하게
+맞춰야 합니다. 실사용 시에는 프런트가 `setup_and_start()`로 자신의 DOM 값을 넘기므로
+파이썬 쪽 기본값이 실제 동작에 영향을 주진 않지만, 두 값이 어긋나면 코드/문서를 읽는
+사람이 혼란을 겪을 수 있습니다. threshold나 가중치 기본값을 변경할 때는 반드시
+`index.html`도 함께 확인하세요.
 
 ## 종합 점수 가중치
 
@@ -226,15 +256,15 @@ RULA의 신체 부위 평가 우선순위를 참고한 heuristic weighting을 �
 
 ## 다리 꼬기
 
-다리 꼬기는 ML feature/label에 포함하지 않습니다.
-`main.py`의 기존 선분 교차 기반 `_detect_leg_cross()` 결과를 그대로 사용하며,
-ML 사용 여부와 관계없이 종합점수에 동일한 별도 감점을 적용합니다.
-측정 결과에는 다리 꼬기 지속 시간도 함께 기록합니다.
+다리 꼬기는 ML feature/label에 포함하지 않습니다. `main.py`의 선분 교차 기반
+`_detect_leg_cross()` (`is_intersect()` 이용) 결과를 그대로 사용하며, ML 사용 여부와
+관계없이 종합점수에 동일한 별도 감점을 적용합니다. 측정 결과에는 다리 꼬기 지속 시간도
+함께 기록합니다.
 
-## Feature importance 진단
+## Feature importance 진단 (`python main.py diagnose`)
 
 ```bash
-python diagnose_feature_importance.py --model-dir models --top 10
+python main.py diagnose --model-dir models --top 10
 ```
 
 RandomForest는 내장 `feature_importances_`를, 선형 계열 모델은 가능한 경우 `coef_` 기반
@@ -252,24 +282,66 @@ RandomForest는 내장 `feature_importances_`를, 선형 계열 모델은 가능
 python main.py calibrate
 ```
 
+### 창 표시 지연 (hidden → show)
+
+일부 Windows PC에서 `webview.start()` 직후 창이 화면에 뜨자마자 몇 초간
+"응답 없음"으로 표시되는 문제가 보고되었습니다. 원인은 이 프로젝트 코드가 아니라
+WebView2 초기화 시점에 외부 프로세스(클립보드 제안된 작업, GPU/게임 오버레이 등)가
+UI Automation으로 창을 조회하면서 pywebview의 `window.native.AccessibilityObject.Bounds`
+접근성 브리지가 재귀적으로 값을 못 풀어내는 것으로 보이는 pywebview/WinForms 쪽 이슈입니다.
+정확한 재현 조건은 환경마다 달라 확정하지 못했습니다.
+
+이를 우회하기 위해 `run_app()`에서 `webview.create_window(..., hidden=True)`로 창을 숨긴
+채 생성한 뒤, `loaded` 이벤트에서 `window.show()`를 호출해 로드가 끝난 뒤에만 창을
+화면에 표시합니다. 문제가 되는 구간(WebView2 초기화 중 접근성 스캔)이 창이 아직
+보이지 않는 상태에서 지나가므로, 사용자 입장에서 "응답 없음" 깜빡임이 보이지 않게 됩니다.
+근본 원인 해결이 아니라 증상을 가리는 우회책이므로, pywebview/WebView2 쪽에서 더 나은
+해결책이 나오면 이 부분을 다시 검토하세요.
+
+### 메인 스레드 사전 초기화
+
+일부 PC(특히 데스크톱의 서드파티 USB3 컨트롤러)에서는 OpenNI2의 device open /
+`create_depth_stream` 호출을 메인 스레드가 아닌 스레드에서 수행하면 예외 없이 그대로
+멈추거나 프로세스가 종료되는 문제가 있습니다. 그래서 `webview.start()`가 메인 스레드의
+이벤트 루프를 가져가기 전에, `run_app()`에서 미리 Astra 카메라를 열어 둡니다
+(`preinitialize_astra_camera`). 캘리브레이션 파일이 없거나 Astra Pro가 연결되어 있지
+않으면 조용히 `None`을 반환하며, 이 경우 웹캠 모드는 평소처럼 정상 동작합니다.
+
+### Depth 파이프라인 성능
+
+Astra Pro 프레임 처리 루프(`run_debug_skeleton_viewer`)는 매 프레임마다 최대 33개
+랜드마크의 depth 값을 정렬된 depth map에서 조회해야 합니다. 조회 지점이 depth가 비어있는
+구멍(hole)에 걸리면 원래는 랜드마크마다 반경을 늘려가며(최대 15px) 주변을 다시 검색하는
+방식이었는데, 이는 프레임당 최대 33 × 15² 회의 numpy 슬라이싱을 유발할 수 있는 순수 Python
+루프였습니다.
+
+지금은 프레임당 `cv2.distanceTransformWithLabels` 호출 1회로 depth map 전체에 대해
+"가장 가까운 유효 픽셀" 룩업 테이블을 한 번에 만들고(`build_nearest_valid_lookup`),
+그 결과를 모든 랜드마크에 대해 한 번에 벡터 연산으로 조회합니다(`batch_sample_depth_near`,
+`batch_backproject_points`). 랜드마크별 Python 루프 자체가 사라지므로 사람이 화면에
+가득 잡혀 유효 landmark 수가 많을수록, 그리고 depth 구멍이 많을수록 상대적 이득이 커집니다.
+
 ## AI 피드백
 
 측정 종료 후 종합 점수, 4개 ML/threshold metric, 다리 꼬기 지속 시간을 Gemini에 전달해
-한국어 코칭 피드백을 생성합니다. metric은 더 이상 angle threshold 값을 리포트의 주 값으로
-사용하지 않고, 부위별 ML score를 중심으로 전달합니다.
+한국어 코칭 피드백을 생성합니다. metric은 angle threshold 값을 리포트의 주 값으로 사용하지
+않고, 부위별 ML score를 중심으로 전달합니다.
 
 ## 알려진 제한사항
 
 - 새 binary 학습 데이터는 기존 UI의 단일 자세 라벨로 수집됩니다. 즉 동일 프레임에서 여러
-  문제를 동시에 직접 라벨링하는 UI는 추가하지 않았습니다. 내부 CSV 스키마는 네 binary target을
-  동시에 표현할 수 있도록 확장되어 있습니다.
-- 실제 모델의 예측 품질은 데이터 수와 사람/세션 다양성에 크게 좌우됩니다. 최소 3명보다 훨씬 많은
-  사람을 여러 세션에서 수집하는 것을 권장합니다.
+  문제를 동시에 직접 라벨링하는 UI는 없습니다. 내부 CSV 스키마는 네 binary target을
+  동시에 표현할 수 있도록 되어 있습니다.
+- 실제 모델의 예측 품질은 데이터 수와 사람/세션 다양성에 크게 좌우됩니다. 최소 3명보다 훨씬
+  많은 사람을 여러 세션에서 수집하는 것을 권장합니다.
 - Astra Pro 3D 데이터와 일반 웹캠 2D 데이터는 분포가 다르므로, 실제 사용 장치와 비슷한 방식으로
   학습 데이터를 수집하는 것이 좋습니다.
-
+- 코드에는 주석을 두지 않는 것을 원칙으로 합니다. 동작을 바꾸는 수정을 할 때는 이 README의
+  관련 섹션도 함께 갱신해 주세요.
 
 ### CSV feature 컬럼 호환성
-`train_pose_classifier.py`는 기존 수집 CSV의 `lm0_x`, `lm0_y`, `lm0_z` 형식을 그대로 사용합니다.
-부위별 모델은 `pose_features.py`의 `PART_LANDMARKS`에 지정된 landmark 컬럼만 선택합니다.
-따라서 기존 `pose_dataset_binary_grouped.csv`처럼 원본 landmark 컬럼을 가진 CSV를 바로 학습에 사용할 수 있습니다.
+
+`python main.py train`은 기존 수집 CSV의 `lm0_x`, `lm0_y`, `lm0_z` 형식을 그대로 사용합니다.
+부위별 모델은 `main.py`의 `PART_LANDMARKS`에 지정된 landmark 컬럼만 선택합니다.
+따라서 기존 `pose_dataset_binary_grouped.csv`처럼 원본 landmark 컬럼을 가진 CSV를 바로 학습에
+사용할 수 있습니다.
