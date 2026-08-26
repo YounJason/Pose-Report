@@ -1233,8 +1233,8 @@ class CameraApp:
         self.WEIGHT_LEG_CROSS = 1.0
 
         self.ML_DECISION_THRESHOLD = {
-            "neck": 0.35,
-            "torso": 0.35,
+            "neck": 0.5,
+            "torso": 0.5,
             "shoulder": 0.5,
             "pelvis": 0.5,
         }
