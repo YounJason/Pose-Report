@@ -1232,6 +1232,13 @@ class CameraApp:
         self.WEIGHT_PELVIS = 15.0
         self.WEIGHT_LEG_CROSS = 1.0
 
+        self.ML_DECISION_THRESHOLD = {
+            "neck": 0.35,
+            "torso": 0.35,
+            "shoulder": 0.5,
+            "pelvis": 0.5,
+        }
+
         self.camera_source = "webcam"
 
         self.debug_mode_enabled = False
@@ -1359,19 +1366,20 @@ class CameraApp:
         return 89.0 * (1.0 - severity), True
 
     @staticmethod
-    def _binary_ml_quality(bundle, features):
+    def _binary_ml_quality(bundle, features, decision_threshold=0.5):
         model = bundle["model"]
         classes = list(bundle.get("classes", getattr(model, "classes_", [0, 1])))
         proba = model.predict_proba(features)[0]
         class_proba = dict(zip(classes, proba))
         p_problem = float(class_proba.get(1, 0.0))
         p_normal = float(class_proba.get(0, 0.0))
-        predicted_problem = p_problem >= p_normal
+        thr = max(0.01, min(0.99, float(decision_threshold)))
+        predicted_problem = p_problem >= thr
         if predicted_problem:
-            severity = max(0.0, min(1.0, (p_problem - 0.5) / 0.5))
+            severity = max(0.0, min(1.0, (p_problem - thr) / max(1e-6, 1.0 - thr)))
             score = 89.0 * (1.0 - severity)
         else:
-            confidence = max(0.0, min(1.0, (p_normal - 0.5) / 0.5))
+            confidence = max(0.0, min(1.0, (thr - p_problem) / max(1e-6, thr)))
             score = 90.0 + 10.0 * confidence
         return float(max(0.0, min(100.0, score))), predicted_problem, p_problem
 
@@ -1480,8 +1488,16 @@ class CameraApp:
                 try:
                     features = extract_part_feature_vector(source, part).reshape(1, -1)
                     score, problem, p_problem = self._binary_ml_quality(
-                        bundle, features
+                        bundle,
+                        features,
+                        decision_threshold=self.ML_DECISION_THRESHOLD.get(part, 0.5),
                     )
+                    if os.getenv("POSE_ML_DEBUG"):
+                        print(
+                            f"[ML-DEBUG] {part}: p_problem={p_problem:.3f} "
+                            f"thr={self.ML_DECISION_THRESHOLD.get(part, 0.5)} "
+                            f"-> {'RISK' if problem else 'normal'} (score={score:.1f})"
+                        )
                     metric_scores[part] = score
                     sources[part] = "ml"
                     if problem:
