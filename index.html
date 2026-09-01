@@ -37,8 +37,13 @@
                 </select>
             </div>
             <div class="form-group" id="cfg-cam-group" style="display:none;"><label>카메라 장치 인덱스</label><input type="number" id="cfg-cam" value="0" step="1"></div>
-            <div class="form-group" id="cfg-debug-cam-group"><label>Astra Pro 카메라 인덱스</label><input type="number" id="cfg-debug-cam" value="0" step="1"></div>
+            <div class="form-group" id="cfg-debug-cam-group"><label>Astra Pro 카메라 인덱스</label><input type="number" id="cfg-debug-cam" value="1" step="1"></div>
             <div class="form-group checkbox-group" id="cfg-debug-group"><label for="cfg-debug">디버그 모드 (3D 스켈레톤 뷰어 창 표시)</label><input type="checkbox" id="cfg-debug"></div>
+            <h3 class="form-section-title">인스타그램 연동</h3>
+            <div class="instagram-login-group">
+                <p class="help-text instagram-login-desc">측정 대기 화면에 인스타그램 릴스를 보여줍니다. 한 번 로그인하면 다음 실행에도 로그인이 유지됩니다.</p>
+                <button type="button" id="btn-instagram-login" class="save-btn instagram-login-btn">인스타그램 로그인</button>
+            </div>
             <button id="btn-save" class="save-btn">설정 완료</button>
         </div>
 
@@ -67,8 +72,15 @@
             <div class="camera-layout">
                 <div class="viewfinder-wrapper">
                     <img id="viewfinder" alt="Camera Feed">
+                    <!-- 인스타그램은 X-Frame-Options/CSP frame-ancestors로 iframe 삽입을
+                         차단하므로 여기에는 더 이상 <iframe>을 두지 않는다. 이 div는
+                         "릴스를 보여줄 화면상의 자리"를 표시하는 용도로만 쓰이고,
+                         실제 릴스는 script.js가 이 div의 위치/크기를 계산해
+                         pywebview.api.open_reels_overlay()에 넘겨 별도의 네이티브 창으로
+                         그 위에 겹쳐서 띄운다. -->
+                    <div class="reels-overlay hidden" id="reels-overlay"></div>
                     <div class="timer-badge" id="timer">60</div>
-                    <div class="status-overlay status-unknown" id="status-box">인식되지 않음</div>
+                    <div class="status-overlay status-unknown" id="status-box">사람이 인식되지 않습니다</div>
                     <div class="precountdown-overlay" id="precountdown-overlay">
                         <span id="precountdown-number">3</span>
                     </div>
@@ -88,7 +100,7 @@
             <div class="report-container">
                 <header class="report-header">
                     <h1>리포트를 생성했습니다!</h1>
-                    <button class="btn" id="btn-restart">처음으로 돌아가기</button>
+                    <button class="btn no-print" id="btn-restart">처음으로 돌아가기</button>
                 </header>
 
                 <div class="report-grid">
@@ -151,8 +163,9 @@
                         </div>
                     </div>
 
-                    <div class="report-card action-card">
-                        <div id="qrcode-download" class="qr-target qr-target-download"></div>
+                    <div class="report-card action-card no-print">
+                        <button class="btn print-btn" id="btn-print">리포트 출력하기</button>
+                        <p class="help-text">A4 용지 한 장에 맞춰 인쇄됩니다.</p>
                     </div>
 
                     <div class="report-card advice-card">

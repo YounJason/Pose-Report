@@ -17,6 +17,8 @@ import pandas as pd
 import requests
 import webview
 from dotenv import load_dotenv
+
+mp_pose = mp.solutions.pose
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
@@ -49,6 +51,8 @@ LABEL_TO_KOREAN = {
     "shoulder_tilt": "어깨 비대칭",
     "pelvis_tilt": "골반 비대칭",
 }
+
+REELS_URL = "https://www.instagram.com/reels/"
 
 BINARY_TARGETS = {
     "neck": "neck_label",
@@ -96,6 +100,52 @@ PART_KOREAN = {
 }
 
 PARTS = tuple(PART_LANDMARKS.keys())
+
+UPPER_BODY_REQUIRED_LANDMARKS = [
+    mp_pose.PoseLandmark.NOSE,
+    mp_pose.PoseLandmark.LEFT_EAR,
+    mp_pose.PoseLandmark.RIGHT_EAR,
+    mp_pose.PoseLandmark.LEFT_SHOULDER,
+    mp_pose.PoseLandmark.RIGHT_SHOULDER,
+]
+
+SEATED_REQUIRED_LANDMARKS = [
+    mp_pose.PoseLandmark.LEFT_HIP,
+    mp_pose.PoseLandmark.RIGHT_HIP,
+    mp_pose.PoseLandmark.LEFT_KNEE,
+    mp_pose.PoseLandmark.RIGHT_KNEE,
+    mp_pose.PoseLandmark.LEFT_ANKLE,
+    mp_pose.PoseLandmark.RIGHT_ANKLE,
+]
+
+def _no_person_result():
+    return (
+        "사람이 인식되지 않습니다",
+        2,
+        0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        False,
+        {p: 0 for p in PARTS},
+        {p: "threshold" for p in PARTS},
+    )
+
+
+def _not_seated_result():
+    return (
+        "자리에 착석해 주세요",
+        3,
+        0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        False,
+        {p: 0 for p in PARTS},
+        {p: "threshold" for p in PARTS},
+    )
 
 PART_ANCHORS = {
     "neck": (LEFT_SHOULDER, RIGHT_SHOULDER),
@@ -1262,6 +1312,13 @@ class CameraApp:
         self._astra_precreated = None
         self._astra_precreated_idx = None
 
+        self.instagram_login_window = None
+
+        # 릴스를 <iframe>이 아니라 별도의 pywebview 네이티브 창으로 띄우기 위한 상태.
+        # (인스타그램이 X-Frame-Options/CSP frame-ancestors로 iframe 삽입을 차단하기
+        # 때문에, iframe이 아니라 화면 위에 겹쳐 놓는 별도 창으로 우회한다.)
+        self.reels_window = None
+
         raw_key = os.getenv("SUPABASE_ANON_KEY", "")
         self.supabase_anon_key = raw_key.strip().replace('"', "").replace("'", "")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -1574,33 +1631,11 @@ class CameraApp:
 
     def _analyze_pose(self, landmarks, w, h):
 
-        required_landmarks = [
-            mp_pose.PoseLandmark.NOSE,
-            mp_pose.PoseLandmark.LEFT_EAR,
-            mp_pose.PoseLandmark.RIGHT_EAR,
-            mp_pose.PoseLandmark.LEFT_SHOULDER,
-            mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            mp_pose.PoseLandmark.LEFT_HIP,
-            mp_pose.PoseLandmark.RIGHT_HIP,
-            mp_pose.PoseLandmark.LEFT_KNEE,
-            mp_pose.PoseLandmark.RIGHT_KNEE,
-            mp_pose.PoseLandmark.LEFT_ANKLE,
-            mp_pose.PoseLandmark.RIGHT_ANKLE,
-        ]
+        if any(landmarks[lm].visibility < 0.5 for lm in UPPER_BODY_REQUIRED_LANDMARKS):
+            return _no_person_result()
 
-        if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+        if any(landmarks[lm].visibility < 0.5 for lm in SEATED_REQUIRED_LANDMARKS):
+            return _not_seated_result()
 
         nose = landmarks[mp_pose.PoseLandmark.NOSE]
         left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
@@ -1682,34 +1717,15 @@ class CameraApp:
 
     def _analyze_pose_3d(self, landmarks, points3d, valid, w, h):
 
-        required_landmarks = [
-            mp_pose.PoseLandmark.NOSE,
-            mp_pose.PoseLandmark.LEFT_EAR,
-            mp_pose.PoseLandmark.RIGHT_EAR,
-            mp_pose.PoseLandmark.LEFT_SHOULDER,
-            mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            mp_pose.PoseLandmark.LEFT_HIP,
-            mp_pose.PoseLandmark.RIGHT_HIP,
-            mp_pose.PoseLandmark.LEFT_KNEE,
-            mp_pose.PoseLandmark.RIGHT_KNEE,
-            mp_pose.PoseLandmark.LEFT_ANKLE,
-            mp_pose.PoseLandmark.RIGHT_ANKLE,
-        ]
         if landmarks is None or any(
-            landmarks[lm].visibility < 0.5 for lm in required_landmarks
+            landmarks[lm].visibility < 0.5 for lm in UPPER_BODY_REQUIRED_LANDMARKS
         ):
-            return (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+            return _no_person_result()
+
+        if any(
+            landmarks[lm].visibility < 0.5 for lm in SEATED_REQUIRED_LANDMARKS
+        ):
+            return _not_seated_result()
 
         angle_landmarks_3d = [
             mp_pose.PoseLandmark.LEFT_EAR,
@@ -1724,18 +1740,7 @@ class CameraApp:
             or valid is None
             or any(not valid[lm.value] for lm in angle_landmarks_3d)
         ):
-            return (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+            return _no_person_result()
 
         def p3(lm):
             return points3d[lm.value].astype(np.float64)
@@ -1916,18 +1921,7 @@ class CameraApp:
                     leg_cross,
                     metric_scores,
                     metric_sources,
-                ) = (
-                    "인식되지 않음",
-                    2,
-                    0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    False,
-                    {p: 0 for p in PARTS},
-                    {p: "threshold" for p in PARTS},
-                )
+                ) = _no_person_result()
             self._push_frame_to_webview(
                 frame,
                 status_text,
@@ -1974,18 +1968,7 @@ class CameraApp:
                 leg_cross,
                 metric_scores,
                 metric_sources,
-            ) = (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+            ) = _no_person_result()
 
         self._push_frame_to_webview(
             frame,
@@ -2087,6 +2070,128 @@ class CameraApp:
 
     def close_window(self):
         self.window.destroy()
+
+    def open_instagram_login(self):
+        # 별도의 pywebview 창을 열어 인스타그램에 로그인하게 합니다.
+        # webview.start()가 private_mode=False + storage_path로 실행되므로
+        # 이 창에서 저장된 로그인 쿠키는 프로그램을 껐다 켜도 유지되고,
+        # index.html 안의 릴스 iframe(screen 4)에서도 같은 프로필을 공유해
+        # 로그인 상태가 그대로 적용됩니다.
+        try:
+            if self.instagram_login_window is not None:
+                try:
+                    self.instagram_login_window.destroy()
+                except Exception:
+                    pass
+                self.instagram_login_window = None
+
+            self.instagram_login_window = webview.create_window(
+                "Instagram 로그인",
+                "https://www.instagram.com/accounts/login/",
+                width=480,
+                height=760,
+            )
+
+            def _on_login_window_closed():
+                self.instagram_login_window = None
+
+            self.instagram_login_window.events.closing += _on_login_window_closed
+        except Exception as e:
+            print(f"[instagram] 로그인 창 열기 실패: {e}")
+
+    # ------------------------------------------------------------------
+    # 인스타그램 릴스 오버레이 (더 이상 <iframe>을 쓰지 않는다)
+    #
+    # 인스타그램은 X-Frame-Options / CSP frame-ancestors 헤더로 자사 페이지가
+    # 다른 페이지의 <iframe> 안에 로드되는 것을 막는다. 이 헤더는 브라우저(webview)
+    # 엔진 레벨에서 강제되기 때문에 sandbox 속성이나 JS로는 우회할 수 없다.
+    #
+    # 반면 이 제약은 "iframe으로 삽입"할 때만 적용되고, 페이지를 최상위 문서로
+    # 직접 로드(top-level navigation)할 때는 적용되지 않는다. 그래서 릴스를
+    # index.html 안의 iframe이 아니라, 카메라 창 위에 겹쳐지는 별도의 테두리 없는
+    # pywebview 창(top-level window)으로 띄운다. index.html의 reels-overlay div가
+    # 화면상에서 차지하는 위치/크기를 JS에서 계산해 넘겨주면, 이 창을 그 자리에
+    # 정확히 겹쳐서 보여준다.
+    # ------------------------------------------------------------------
+
+    def open_reels_overlay(self, x, y, width, height):
+        """reels-overlay div의 화면 좌표(x, y, width, height, 메인 창 기준 CSS px)를
+        받아 그 위치에 릴스 창을 띄우거나 옮긴다."""
+        try:
+            base_x = int(self.window.x or 0)
+            base_y = int(self.window.y or 0)
+        except Exception:
+            base_x, base_y = 0, 0
+
+        screen_x = base_x + int(x)
+        screen_y = base_y + int(y)
+        width = max(1, int(width))
+        height = max(1, int(height))
+
+        try:
+            if self.reels_window is None:
+                self.reels_window = webview.create_window(
+                    "Instagram Reels",
+                    REELS_URL,
+                    x=screen_x,
+                    y=screen_y,
+                    width=width,
+                    height=height,
+                    frameless=True,
+                    easy_drag=False,
+                    on_top=True,
+                )
+
+                def _on_reels_window_closed():
+                    self.reels_window = None
+
+                self.reels_window.events.closing += _on_reels_window_closed
+            else:
+                self.reels_window.resize(width, height)
+                self.reels_window.move(screen_x, screen_y)
+                try:
+                    self.reels_window.show()
+                except Exception:
+                    pass
+            self.unmute_reels_overlay()
+        except Exception as e:
+            print(f"[reels] 릴스 창 열기/이동 실패: {e}")
+
+    def mute_reels_overlay(self):
+        if self.reels_window is None:
+            return
+        try:
+            self.reels_window.evaluate_js(
+                "document.querySelectorAll('video').forEach(v => { v.muted = true; });"
+            )
+        except Exception as e:
+            print(f"[reels] 음소거 실패: {e}")
+
+    def unmute_reels_overlay(self):
+        if self.reels_window is None:
+            return
+        try:
+            self.reels_window.evaluate_js(
+                "document.querySelectorAll('video').forEach(v => { v.muted = false; v.play && v.play().catch(() => {}); });"
+            )
+        except Exception as e:
+            print(f"[reels] 음소거 해제 실패: {e}")
+
+    def hide_reels_overlay(self, mute_only=False):
+        if self.reels_window is None:
+            return
+        try:
+            self.mute_reels_overlay()
+            if mute_only:
+                # 재생 위치를 유지한 채 잠깐 숨기기만 한다.
+                self.reels_window.hide()
+            else:
+                # 완전히 종료: 창을 닫는다 (다음에 open_reels_overlay가
+                # 다시 로그인 세션을 공유한 새 창을 만든다).
+                self.reels_window.destroy()
+                self.reels_window = None
+        except Exception as e:
+            print(f"[reels] 릴스 창 숨기기 실패: {e}")
 
     def toggle_camera(self, enabled):
 
@@ -2608,7 +2713,14 @@ def run_app():
 
     app_logic.window.events.loaded += _on_loaded
     threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
-    webview.start()
+
+    # private_mode=False + storage_path: 인스타그램 로그인 쿠키/세션이
+    # 디스크에 저장되어 프로그램을 껐다 켜도 로그인 상태가 유지됩니다.
+    storage_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), ".webview_data"
+    )
+    os.makedirs(storage_dir, exist_ok=True)
+    webview.start(private_mode=False, storage_path=storage_dir)
 
 
 COMMANDS = {
