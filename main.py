@@ -818,7 +818,6 @@ class StereoCalibrator:
         T_d2c = -R.T @ T
 
         data = {
-            "description": "R, T는 Depth(IR) 좌표계를 RGB 좌표계로 변환합니다: P_rgb = R @ P_depth + T",
             "rgb_camera_matrix": K_rgb.tolist(),
             "rgb_dist_coeffs": dist_rgb.tolist(),
             "ir_camera_matrix": K_ir.tolist(),

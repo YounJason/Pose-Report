@@ -43,8 +43,6 @@ Pose-Report/
 └── README.md
 ```
 
-`frontend/` 아래 파일은 이 프로젝트의 개편 대상에서 제외합니다.
-
 ## 설치
 
 ```bash
