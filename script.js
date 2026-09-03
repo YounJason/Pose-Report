@@ -102,7 +102,7 @@ async function showScreen(index, useFade = true) {
                 return v.toString(16);
             });
 
-        const qrUrl = `https://pose-report.netlify.app/#${currentUuid}`;
+        const qrUrl = `https://focus-fit-ai.vercel.app/#${currentUuid}`;
 
         try {
             const qrContainer = document.getElementById("qrcode-privacy");
@@ -237,7 +237,7 @@ async function showScreen(index, useFade = true) {
             const qrDownloadContainer = document.getElementById("qrcode-download");
             if (qrDownloadContainer) {
                 qrDownloadContainer.innerHTML = "";
-                const resultQrUrl = `https://pose-report.netlify.app/result/#${currentUuid}`;
+                const resultQrUrl = `https://focus-fit-ai.vercel.app/result/#${currentUuid}`;
                 new QRCode(qrDownloadContainer, {
                     text: resultQrUrl,
                     width: 200,
