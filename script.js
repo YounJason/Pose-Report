@@ -24,7 +24,6 @@ let collectedMetrics = {
     torso: [],
     shoulder: [],
     pelvis: [],
-    metricSources: { neck: [], torso: [], shoulder: [], pelvis: [] },
     legCross: []
 };
 
@@ -34,7 +33,6 @@ let finalReportData = {
     torso: 0,
     shoulder: 0,
     pelvis: 0,
-    metricSources: { neck: "threshold", torso: "threshold", shoulder: "threshold", pelvis: "threshold" },
     legCrossSeconds: 0
 };
 
@@ -142,7 +140,7 @@ async function showScreen(index, useFade = true) {
     if (currentIndex === 4) {
         if (window.pywebview) window.pywebview.api.toggle_camera(true);
 
-        collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], metricSources: { neck: [], torso: [], shoulder: [], pelvis: [] }, legCross: [] };
+        collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
         timeLeft = 30;
         // The 30s timer stays paused until the user's sitting posture is
@@ -165,11 +163,6 @@ async function showScreen(index, useFade = true) {
                 clearInterval(countdownInterval);
 
                 const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-                const dominantSource = arr => {
-                    if (!arr || !arr.length) return "threshold";
-                    const mlCount = arr.filter(v => v === "ml").length;
-                    return mlCount >= arr.length / 2 ? "ml" : "threshold";
-                };
                 const legCrossRatio = calcAvg(collectedMetrics.legCross);
                 finalReportData = {
                     score: Math.round(calcAvg(collectedMetrics.scores)),
@@ -177,12 +170,6 @@ async function showScreen(index, useFade = true) {
                     torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
                     shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
                     pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1)),
-                    metricSources: {
-                        neck: dominantSource(collectedMetrics.metricSources.neck),
-                        torso: dominantSource(collectedMetrics.metricSources.torso),
-                        shoulder: dominantSource(collectedMetrics.metricSources.shoulder),
-                        pelvis: dominantSource(collectedMetrics.metricSources.pelvis)
-                    },
                     legCrossSeconds: parseFloat((legCrossRatio * 30).toFixed(1))
                 };
 
@@ -273,14 +260,13 @@ async function showScreen(index, useFade = true) {
             scoreNumEl.innerText = finalReportData.score;
         }
 
-        const metricSourceLabel = source => source === "ml" ? "ML" : "Threshold";
-        const setMetricUI = (valId, barId, value, goodText, warnText, source) => {
+        const setMetricUI = (valId, barId, value, goodText, warnText) => {
             const valEl = document.getElementById(valId);
             const barEl = document.getElementById(barId);
             const numeric = Math.max(0, Math.min(100, Number(value) || 0));
             const isGood = numeric >= 90;
             if (valEl) {
-                valEl.innerText = `${Math.round(numeric)}점 · ${isGood ? goodText : warnText} · ${metricSourceLabel(source)}`;
+                valEl.innerText = `${Math.round(numeric)}점 · ${isGood ? goodText : warnText}`;
                 valEl.className = `metric-value ${isGood ? 'status-good' : 'status-warning'}`;
             }
             if (barEl) {
@@ -291,10 +277,10 @@ async function showScreen(index, useFade = true) {
         };
 
         const barTargets = [
-            setMetricUI('val-turtle', 'bar-turtle', finalReportData.turtle, '양호', '주의', finalReportData.metricSources?.neck),
-            setMetricUI('val-torso', 'bar-torso', finalReportData.torso, '안정', '주의', finalReportData.metricSources?.torso),
-            setMetricUI('val-shoulder', 'bar-shoulder', finalReportData.shoulder, '정상', '주의', finalReportData.metricSources?.shoulder),
-            setMetricUI('val-pelvis', 'bar-pelvis', finalReportData.pelvis, '정상', '주의', finalReportData.metricSources?.pelvis)
+            setMetricUI('val-turtle', 'bar-turtle', finalReportData.turtle, '양호', '주의'),
+            setMetricUI('val-torso', 'bar-torso', finalReportData.torso, '안정', '주의'),
+            setMetricUI('val-shoulder', 'bar-shoulder', finalReportData.shoulder, '정상', '주의'),
+            setMetricUI('val-pelvis', 'bar-pelvis', finalReportData.pelvis, '정상', '주의')
         ];
 
         const fadeDelay = useFade ? 800 : 50;
@@ -443,7 +429,7 @@ function startPreCountdown() {
     preCountdownTimeout = setTimeout(tick, 1000);
 }
 
-window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross, mlScores, metricSources) {
+window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross, partScores) {
     if (currentIndex !== 4) return;
 
     document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
@@ -472,16 +458,11 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
             isPaused = false;
             if (typeof score === 'number') {
                 collectedMetrics.scores.push(score);
-                const scores = mlScores || {};
+                const scores = partScores || {};
                 collectedMetrics.turtle.push(typeof scores.neck === "number" ? scores.neck : (turtleAng || 0));
                 collectedMetrics.torso.push(typeof scores.torso === "number" ? scores.torso : (torsoAng || 0));
                 collectedMetrics.shoulder.push(typeof scores.shoulder === "number" ? scores.shoulder : (shoulderAng || 0));
                 collectedMetrics.pelvis.push(typeof scores.pelvis === "number" ? scores.pelvis : (pelvisAng || 0));
-                const sources = metricSources || {};
-                collectedMetrics.metricSources.neck.push(sources.neck || "threshold");
-                collectedMetrics.metricSources.torso.push(sources.torso || "threshold");
-                collectedMetrics.metricSources.shoulder.push(sources.shoulder || "threshold");
-                collectedMetrics.metricSources.pelvis.push(sources.pelvis || "threshold");
                 collectedMetrics.legCross.push(legCross ? 1 : 0);
             }
         }

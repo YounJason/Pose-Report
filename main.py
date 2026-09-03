@@ -1,6 +1,5 @@
 import argparse
 import base64
-import csv
 import json
 import math
 import os
@@ -13,49 +12,9 @@ from datetime import datetime, timezone
 import cv2
 import mediapipe as mp
 import numpy as np
-import pandas as pd
 import requests
 import webview
 from dotenv import load_dotenv
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    roc_auc_score,
-)
-from sklearn.model_selection import (
-    LeaveOneGroupOut,
-    cross_val_predict,
-    cross_val_score,
-)
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
-
-try:
-    import joblib
-except ImportError:
-    joblib = None
-
-NUM_LANDMARKS = 33
-
-POSE_LABELS = ["normal", "turtle_neck", "slouch", "shoulder_tilt", "pelvis_tilt"]
-
-LABEL_TO_KOREAN = {
-    "normal": "바른 자세",
-    "turtle_neck": "거북목",
-    "slouch": "등 굽음",
-    "shoulder_tilt": "어깨 비대칭",
-    "pelvis_tilt": "골반 비대칭",
-}
-
-BINARY_TARGETS = {
-    "neck": "neck_label",
-    "torso": "torso_label",
-    "shoulder": "shoulder_label",
-    "pelvis": "pelvis_label",
-}
 
 NOSE = 0
 LEFT_EYE = 2
@@ -97,76 +56,10 @@ PART_KOREAN = {
 
 PARTS = tuple(PART_LANDMARKS.keys())
 
-PART_ANCHORS = {
-    "neck": (LEFT_SHOULDER, RIGHT_SHOULDER),
-    "torso": (LEFT_HIP, RIGHT_HIP),
-    "shoulder": (LEFT_SHOULDER, RIGHT_SHOULDER),
-    "pelvis": (LEFT_HIP, RIGHT_HIP),
-}
-
-PART_SCALES = {
-    "neck": (LEFT_SHOULDER, RIGHT_SHOULDER),
-    "torso": (LEFT_SHOULDER, RIGHT_SHOULDER),
-    "shoulder": (LEFT_SHOULDER, RIGHT_SHOULDER),
-    "pelvis": (LEFT_HIP, RIGHT_HIP),
-}
-
-FEATURE_COLUMNS_BY_PART = {}
-FEATURE_COLUMNS = []
-for _part, _indices in PART_LANDMARKS.items():
-    _cols = [f"lm{idx}_{axis}" for idx in _indices for axis in ("x", "y", "z")]
-    FEATURE_COLUMNS_BY_PART[_part] = _cols
-    FEATURE_COLUMNS.extend(_cols)
-
-
-def landmarks_to_array(landmarks):
-    return np.array([[lm.x, lm.y, lm.z] for lm in landmarks], dtype=np.float64)
-
-
-def _ensure_array(landmarks_xyz):
-    if not isinstance(landmarks_xyz, np.ndarray):
-        landmarks_xyz = landmarks_to_array(landmarks_xyz)
-    if landmarks_xyz.shape != (NUM_LANDMARKS, 3):
-        raise ValueError(
-            f"landmarks shape must be ({NUM_LANDMARKS}, 3), got {landmarks_xyz.shape}"
-        )
-    return landmarks_xyz.astype(np.float64, copy=False)
-
-
-def extract_part_feature_vector(landmarks_xyz, part):
-    if part not in PART_LANDMARKS:
-        raise ValueError(f"unknown part: {part}")
-    arr = _ensure_array(landmarks_xyz)
-    anchor_a, anchor_b = PART_ANCHORS[part]
-    scale_a, scale_b = PART_SCALES[part]
-    origin = (arr[anchor_a] + arr[anchor_b]) / 2.0
-    scale = float(np.linalg.norm(arr[scale_a] - arr[scale_b]))
-    if scale < 1e-6:
-        scale = 1e-6
-    indices = PART_LANDMARKS[part]
-    normalized = (arr[indices] - origin) / scale
-    return normalized.flatten()
-
-
-def extract_all_part_features(landmarks_xyz):
-    return {part: extract_part_feature_vector(landmarks_xyz, part) for part in PARTS}
-
-
-def extract_feature_vector(landmarks_xyz):
-    return np.concatenate(
-        [extract_part_feature_vector(landmarks_xyz, part) for part in PARTS]
-    )
-
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, ".env")
 load_dotenv(dotenv_path=env_path) if os.path.exists(env_path) else load_dotenv()
 
-
-POSE_MODEL_DIR = os.path.join(current_dir, "models")
-POSE_MODEL_PATHS = {
-    part: os.path.join(POSE_MODEL_DIR, f"{part}_classifier.joblib") for part in PARTS
-}
 
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
@@ -1236,13 +1129,6 @@ class CameraApp:
         self.WEIGHT_PELVIS = 15.0
         self.WEIGHT_LEG_CROSS = 1.0
 
-        self.ML_DECISION_THRESHOLD = {
-            "neck": 0.5,
-            "torso": 0.5,
-            "shoulder": 0.5,
-            "pelvis": 0.5,
-        }
-
         self.camera_source = "webcam"
 
         self.debug_mode_enabled = False
@@ -1266,37 +1152,8 @@ class CameraApp:
         self.supabase_anon_key = raw_key.strip().replace('"', "").replace("'", "")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY", "").strip()
 
-        self.ml_models = {}
-        self._load_ml_models()
-
     def get_supabase_key(self):
         return self.supabase_anon_key
-
-    def _load_ml_models(self, model_dir=None):
-        self.ml_models = {}
-        model_dir = model_dir or POSE_MODEL_DIR
-        if joblib is None:
-            print("[ML] joblib 미설치 - 모든 부위를 threshold 방식으로 동작합니다.")
-            return
-        for part in PARTS:
-            model_path = os.path.join(model_dir, f"{part}_classifier.joblib")
-            if not os.path.exists(model_path):
-                print(f"[ML] {part}: 모델 없음 -> threshold fallback")
-                continue
-            try:
-                bundle = joblib.load(model_path)
-                if "model" not in bundle:
-                    raise ValueError("bundle에 model이 없습니다")
-                self.ml_models[part] = bundle
-                print(
-                    f"[ML] {part}: {os.path.basename(model_path)} 로드 완료 (모델={bundle.get('model_name', '?')})"
-                )
-            except Exception as e:
-                print(f"[ML] {part}: 모델 로드 실패 -> threshold fallback: {e}")
-        print(
-            "[ML] 현재 사용 가능한 부위 모델:",
-            ", ".join(self.ml_models.keys()) or "없음",
-        )
 
     def setup_and_start(
         self,
@@ -1369,24 +1226,6 @@ class CameraApp:
         severity = max(0.0, min(1.0, over / max(1e-6, severe_gap)))
         return 89.0 * (1.0 - severity), True
 
-    @staticmethod
-    def _binary_ml_quality(bundle, features, decision_threshold=0.5):
-        model = bundle["model"]
-        classes = list(bundle.get("classes", getattr(model, "classes_", [0, 1])))
-        proba = model.predict_proba(features)[0]
-        class_proba = dict(zip(classes, proba))
-        p_problem = float(class_proba.get(1, 0.0))
-        p_normal = float(class_proba.get(0, 0.0))
-        thr = max(0.01, min(0.99, float(decision_threshold)))
-        predicted_problem = p_problem >= thr
-        if predicted_problem:
-            severity = max(0.0, min(1.0, (p_problem - thr) / max(1e-6, 1.0 - thr)))
-            score = 89.0 * (1.0 - severity)
-        else:
-            confidence = max(0.0, min(1.0, (thr - p_problem) / max(1e-6, thr)))
-            score = 90.0 + 10.0 * confidence
-        return float(max(0.0, min(100.0, score))), predicted_problem, p_problem
-
     def _score_from_angles(
         self,
         neck_angle,
@@ -1457,118 +1296,6 @@ class CameraApp:
             is_normal,
             health_score,
             {k: round(v, 2) for k, v in metric_scores.items()},
-            sources,
-        )
-
-    ML_3D_MIN_VALID_LANDMARKS = 25
-
-    def _score_pose(
-        self,
-        landmarks,
-        neck_angle,
-        head_tilt_angle,
-        torso_angle,
-        spine_lean_angle,
-        shoulder_angle,
-        pelvis_angle,
-        leg_cross,
-        points3d=None,
-        valid=None,
-    ):
-        source = landmarks
-        if (
-            points3d is not None
-            and valid is not None
-            and int(np.count_nonzero(valid)) >= self.ML_3D_MIN_VALID_LANDMARKS
-        ):
-            source = np.asarray(points3d, dtype=np.float64)
-
-        metric_scores = {}
-        sources = {}
-        status_list = []
-        for part in PARTS:
-            bundle = self.ml_models.get(part)
-            if bundle is not None:
-                try:
-                    features = extract_part_feature_vector(source, part).reshape(1, -1)
-                    score, problem, p_problem = self._binary_ml_quality(
-                        bundle,
-                        features,
-                        decision_threshold=self.ML_DECISION_THRESHOLD.get(part, 0.5),
-                    )
-                    if os.getenv("POSE_ML_DEBUG"):
-                        print(
-                            f"[ML-DEBUG] {part}: p_problem={p_problem:.3f} "
-                            f"thr={self.ML_DECISION_THRESHOLD.get(part, 0.5)} "
-                            f"-> {'RISK' if problem else 'normal'} (score={score:.1f})"
-                        )
-                    metric_scores[part] = score
-                    sources[part] = "ml"
-                    if problem:
-                        status_list.append(
-                            f"{PART_KOREAN[part]} 위험 ({p_problem * 100:.0f}%)"
-                        )
-                    continue
-                except Exception as e:
-                    print(f"[ML] {part}: 프레임 예측 실패 -> threshold fallback: {e}")
-
-            sources[part] = "threshold"
-            if part == "neck":
-                a, pa = self._threshold_quality(
-                    neck_angle, self.TURTLE_NECK_ANGLE_THRESHOLD, 8.0
-                )
-                b, pb = self._threshold_quality(
-                    head_tilt_angle, self.HEAD_TILT_ANGLE_THRESHOLD, 5.0
-                )
-                metric_scores[part] = min(a, b)
-                if pa:
-                    status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
-                if pb:
-                    status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
-            elif part == "torso":
-                a, pa = self._threshold_quality(
-                    torso_angle, self.TORSO_ANGLE_THRESHOLD, 10.0
-                )
-                b, pb = self._threshold_quality(
-                    spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD, 8.0
-                )
-                metric_scores[part] = min(a, b)
-                if pa:
-                    status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
-                if pb:
-                    status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
-            elif part == "shoulder":
-                metric_scores[part], prob = self._threshold_quality(
-                    shoulder_angle, self.SHOULDER_ANGLE_THRESHOLD, 8.0
-                )
-                if prob:
-                    status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
-            else:
-                metric_scores[part], prob = self._threshold_quality(
-                    pelvis_angle, self.PELVIS_ANGLE_THRESHOLD, 7.0
-                )
-                if prob:
-                    status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
-
-        weights = {
-            "neck": max(0.0, self.WEIGHT_NECK),
-            "torso": max(0.0, self.WEIGHT_TRUNK),
-            "shoulder": max(0.0, self.WEIGHT_SHOULDER),
-            "pelvis": max(0.0, self.WEIGHT_PELVIS),
-        }
-        wsum = sum(weights.values()) or 1.0
-        health_score = sum(metric_scores[p] * weights[p] for p in PARTS) / wsum
-        if leg_cross:
-            health_score -= 20.0 * max(0.0, self.WEIGHT_LEG_CROSS)
-            status_list.append("다리 꼬기")
-        health_score = int(round(max(0.0, min(100.0, health_score))))
-        status_text = ", ".join(dict.fromkeys(status_list)) if status_list else "정상"
-        is_normal = 1 if status_text == "정상" else 0
-        return (
-            status_text,
-            is_normal,
-            health_score,
-            {k: round(float(v), 2) for k, v in metric_scores.items()},
             sources,
         )
 
@@ -1657,8 +1384,7 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
-        status_text, is_normal, health_score, metric_scores, sources = self._score_pose(
-            landmarks,
+        status_text, is_normal, health_score, metric_scores, sources = self._score_from_angles(
             neck_angle,
             head_tilt_angle,
             torso_angle,
@@ -1781,8 +1507,7 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
-        status_text, is_normal, health_score, metric_scores, sources = self._score_pose(
-            landmarks,
+        status_text, is_normal, health_score, metric_scores, sources = self._score_from_angles(
             neck_angle,
             head_tilt_angle,
             torso_angle,
@@ -1790,8 +1515,6 @@ class CameraApp:
             shoulder_angle,
             pelvis_angle,
             leg_cross,
-            points3d=points3d,
-            valid=valid,
         )
         return (
             status_text,
@@ -2184,395 +1907,6 @@ class CameraApp:
         self._debug_stop_event = None
 
 
-def _new_session_id():
-    return (
-        datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        + "_"
-        + uuid.uuid4().hex[:8]
-    )
-
-
-def _collect_header():
-    cols = ["session_id", "person_id", "frame_id", "source_label"]
-    cols += [f"{part}_label" for part in PARTS]
-    for part in PARTS:
-        cols += FEATURE_COLUMNS_BY_PART[part]
-    return cols
-
-
-COLLECT_KEY_TO_LABEL = {
-    ord("1"): "normal",
-    ord("2"): "turtle_neck",
-    ord("3"): "slouch",
-    ord("4"): "shoulder_tilt",
-    ord("5"): "pelvis_tilt",
-}
-COLLECT_LABEL_TO_TARGET = {
-    "normal": {"neck": 0, "torso": 0, "shoulder": 0, "pelvis": 0},
-    "turtle_neck": {"neck": 1, "torso": 0, "shoulder": 0, "pelvis": 0},
-    "slouch": {"neck": 0, "torso": 1, "shoulder": 0, "pelvis": 0},
-    "shoulder_tilt": {"neck": 0, "torso": 0, "shoulder": 1, "pelvis": 0},
-    "pelvis_tilt": {"neck": 0, "torso": 0, "shoulder": 0, "pelvis": 1},
-}
-
-
-def cmd_collect(argv):
-    parser = argparse.ArgumentParser(description="자세 데이터 수집기")
-    parser.add_argument("--output", default="pose_dataset.csv")
-    parser.add_argument("--camera", type=int, default=0)
-    parser.add_argument("--person-id", default=None)
-    parser.add_argument("--session-id", default=None)
-    args = parser.parse_args(argv)
-
-    person_id = args.person_id or input("Person ID: ").strip()
-    if not person_id:
-        raise SystemExit("person_id는 비워둘 수 없습니다.")
-    session_id = args.session_id or _new_session_id()
-
-    file_exists = os.path.exists(args.output)
-    counts = {label: 0 for label in POSE_LABELS}
-    if file_exists:
-        try:
-            with open(args.output, "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    label = row.get("source_label") or row.get("label")
-                    if label in counts:
-                        counts[label] += 1
-        except Exception as e:
-            print(f"[경고] 기존 카운트 읽기 실패: {e}")
-
-    need_header = not file_exists or os.path.getsize(args.output) == 0
-    csv_file = open(args.output, "a", newline="", encoding="utf-8")
-    writer = csv.writer(csv_file)
-    if need_header:
-        writer.writerow(_collect_header())
-
-    collect_mp_pose = mp.solutions.pose
-    collect_pose = collect_mp_pose.Pose(
-        model_complexity=1, min_detection_confidence=0.5, min_tracking_confidence=0.5
-    )
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        raise RuntimeError(f"카메라 {args.camera} 를 열 수 없습니다.")
-
-    current_label = None
-    frame_id = 0
-    print(f"[수집] person_id={person_id}, session_id={session_id}")
-    print("숫자 키(1~5)로 기존 라벨을 선택하면 그 라벨로 계속 기록됩니다.")
-    print("space: 일시정지 / q: 종료")
-    for k, v in COLLECT_KEY_TO_LABEL.items():
-        print(f"  {chr(k)} -> {v} ({LABEL_TO_KOREAN[v]})")
-
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = collect_pose.process(rgb)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                break
-            if key == ord(" "):
-                current_label = None
-            elif key in COLLECT_KEY_TO_LABEL:
-                current_label = COLLECT_KEY_TO_LABEL[key]
-
-            if results.pose_landmarks:
-                mp.solutions.drawing_utils.draw_landmarks(
-                    frame, results.pose_landmarks, collect_mp_pose.POSE_CONNECTIONS
-                )
-                if current_label is not None:
-                    landmarks = landmarks_to_array(results.pose_landmarks.landmark)
-                    all_features = extract_all_part_features(landmarks)
-                    targets = COLLECT_LABEL_TO_TARGET[current_label]
-                    frame_id += 1
-                    row = [session_id, person_id, frame_id, current_label]
-                    row += [targets[part] for part in PARTS]
-                    for part in PARTS:
-                        row += all_features[part].tolist()
-                    writer.writerow(row)
-                    csv_file.flush()
-                    counts[current_label] += 1
-
-            status = (
-                f"기록 중: {LABEL_TO_KOREAN[current_label]}"
-                if current_label
-                else "일시정지 (숫자 키를 누르세요)"
-            )
-            color = (0, 255, 0) if current_label else (0, 0, 255)
-            cv2.putText(
-                frame, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2
-            )
-            y = 60
-            for label, cnt in counts.items():
-                cv2.putText(
-                    frame,
-                    f"{LABEL_TO_KOREAN[label]}: {cnt}",
-                    (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 255),
-                    1,
-                )
-                y += 22
-            cv2.putText(
-                frame,
-                f"person: {person_id} | session: {session_id}",
-                (10, 180),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                (255, 255, 255),
-                1,
-            )
-            cv2.imshow("Pose Data Collector (q: quit)", frame)
-    finally:
-        cap.release()
-        collect_pose.close()
-        cv2.destroyAllWindows()
-        csv_file.close()
-        print("수집 완료:", counts)
-
-
-TRAIN_RANDOM_STATE = 42
-
-
-def _train_candidate_models():
-    return {
-        "random_forest": RandomForestClassifier(
-            n_estimators=350,
-            min_samples_leaf=2,
-            random_state=TRAIN_RANDOM_STATE,
-            n_jobs=-1,
-        ),
-        "svm_rbf": Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "svc",
-                    SVC(
-                        kernel="rbf",
-                        C=10.0,
-                        gamma="scale",
-                        probability=True,
-                        random_state=TRAIN_RANDOM_STATE,
-                    ),
-                ),
-            ]
-        ),
-    }
-
-
-def _lopo_cv_score(model, X, y, groups):
-    """Leave-One-Person-Out 정확도. 각 fold는 한 명을 통째로 검증셋으로 뺀다."""
-    n_people = len(np.unique(groups))
-    if n_people < 2:
-        raise ValueError("LOPO를 수행하려면 최소 2명이 필요합니다.")
-    cv = LeaveOneGroupOut()
-    scores = cross_val_score(
-        model, X, y, cv=cv, groups=groups, scoring="accuracy", n_jobs=-1
-    )
-    return n_people, float(scores.mean()), float(scores.std())
-
-
-def _lopo_predictions(model, X, y, groups):
-    """모든 사람에 대해 '그 사람을 뺀 나머지로 학습한 모델'의 예측을 모아 반환.
-    (데이터를 낭비하는 별도 val/test 분리 없이, 전원을 평가에 활용)"""
-    cv = LeaveOneGroupOut()
-    pred = cross_val_predict(model, X, y, cv=cv, groups=groups, n_jobs=-1)
-    proba = None
-    if hasattr(model, "predict_proba"):
-        try:
-            proba = cross_val_predict(
-                model, X, y, cv=cv, groups=groups, n_jobs=-1, method="predict_proba"
-            )
-        except Exception:
-            proba = None
-    return pred, proba
-
-
-def _validate_binary(y, part):
-    counts = pd.Series(y).value_counts().to_dict()
-    if set(counts) != {0, 1}:
-        raise ValueError(
-            f"{part}: 0/1 두 클래스가 모두 필요합니다. 현재 분포: {counts}"
-        )
-
-
-def cmd_train(argv):
-    if joblib is None:
-        sys.exit(
-            "joblib이 설치되어 있지 않습니다. `pip install scikit-learn joblib pandas`로 설치하세요."
-        )
-    parser = argparse.ArgumentParser(
-        description="부위별 자세 이진분류기 학습 (Leave-One-Person-Out)"
-    )
-    parser.add_argument("--data", default="pose_dataset.csv")
-    parser.add_argument("--output-dir", default="models")
-    args = parser.parse_args(argv)
-
-    df = pd.read_csv(args.data)
-    required_base = ["person_id", "session_id"]
-    missing_base = [c for c in required_base if c not in df.columns]
-    if missing_base:
-        sys.exit(
-            "CSV에 그룹 분할용 컬럼이 없습니다: "
-            + ", ".join(missing_base)
-            + ". 'python main.py collect'로 새 버전 CSV를 다시 수집하세요."
-        )
-
-    n_people = df["person_id"].nunique()
-    if n_people < 2:
-        sys.exit("person_id가 2명 미만입니다. LOPO 검증을 위해 최소 2명이 필요합니다.")
-
-    print(f"전체={len(df)}행, 인원수={n_people} (LOPO: 매 fold마다 1명씩 제외하고 검증)")
-
-    os.makedirs(args.output_dir, exist_ok=True)
-    manifest = {
-        "random_state": TRAIN_RANDOM_STATE,
-        "validation_scheme": "leave_one_person_out",
-        "parts": {},
-        "people": sorted(df["person_id"].astype(str).unique().tolist()),
-    }
-
-    for part in PARTS:
-        feature_cols = FEATURE_COLUMNS_BY_PART[part]
-        target = BINARY_TARGETS[part]
-        missing = [c for c in feature_cols + [target] if c not in df.columns]
-        if missing:
-            sys.exit(f"{part}: CSV에 필요한 컬럼이 없습니다: {missing[:8]}")
-
-        data = df.dropna(subset=feature_cols + [target]).copy()
-        _validate_binary(data[target].astype(int).values, part)
-
-        X = data[feature_cols].values
-        y = data[target].astype(int).values
-        groups = data["person_id"].astype(str).values
-
-        print(f"\n=== {part} ({target}) ===")
-        print("label 분포(전체):", data[target].value_counts().to_dict())
-
-        # 사람별 라벨 분포도 보여줘서, 어느 사람이 한쪽 클래스만 갖고 있는지 진단하기 쉽게 함
-        per_person = (
-            data.groupby(groups)[target].value_counts().unstack(fill_value=0)
-        )
-        print("사람별 label 분포:\n", per_person.to_string())
-
-        candidates = _train_candidate_models()
-        best_name, best_model, best_score = None, None, -1.0
-        for name, model in candidates.items():
-            try:
-                n_used, mean, std = _lopo_cv_score(model, X, y, groups)
-            except ValueError as e:
-                print(f"[{name}] 건너뜀: {e}")
-                continue
-            print(f"[{name}] LOPO({n_used}명) accuracy={mean:.4f} (+/- {std:.4f})")
-            if mean > best_score:
-                best_name, best_model, best_score = name, model, mean
-
-        if best_model is None:
-            sys.exit(f"{part}: 학습 가능한 모델이 없습니다.")
-
-        # 전원에 대한 out-of-fold 예측을 모아서, 별도로 val/test를 떼어내지 않고도
-        # 데이터를 전부 학습에 쓰면서 신뢰도 있는 성능 지표를 얻는다.
-        pred, proba = _lopo_predictions(best_model, X, y, groups)
-        metrics = {
-            "lopo": {
-                "accuracy": float(accuracy_score(y, pred)),
-                "classification_report": classification_report(
-                    y, pred, output_dict=True, zero_division=0
-                ),
-                "confusion_matrix": confusion_matrix(y, pred, labels=[0, 1]).tolist(),
-            }
-        }
-        if proba is not None and len(np.unique(y)) == 2:
-            try:
-                metrics["lopo"]["roc_auc"] = float(roc_auc_score(y, proba[:, 1]))
-            except Exception:
-                pass
-        print(f"LOPO out-of-fold accuracy={metrics['lopo']['accuracy']:.4f}")
-
-        # 사람별 fold 정확도도 남겨서, 특정 인원 때문에 성능이 흔들리는지 확인 가능하게 함
-        per_person_acc = {}
-        for person in np.unique(groups):
-            mask = groups == person
-            per_person_acc[str(person)] = float(accuracy_score(y[mask], pred[mask]))
-        metrics["lopo"]["per_person_accuracy"] = per_person_acc
-
-        # 최종 배포 모델은 전체 인원(10명) 데이터를 다 써서 다시 학습
-        best_model.fit(X, y)
-
-        bundle = {
-            "model": best_model,
-            "model_name": best_name,
-            "classes": [0, 1],
-            "feature_columns": feature_cols,
-            "part": part,
-            "target": target,
-            "normal_class": 0,
-            "problem_class": 1,
-            "cv_accuracy": best_score,
-            "metrics": metrics,
-        }
-        out_path = os.path.join(args.output_dir, f"{part}_classifier.joblib")
-        joblib.dump(bundle, out_path)
-        manifest["parts"][part] = {
-            "model": os.path.basename(out_path),
-            "model_name": best_name,
-            "cv_accuracy": best_score,
-            "metrics": metrics,
-        }
-        print(f"저장: {out_path}")
-
-    with open(
-        os.path.join(args.output_dir, "training_manifest.json"), "w", encoding="utf-8"
-    ) as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
-    print("\n모든 부위 모델 학습 및 저장 완료 (전체 인원 데이터로 최종 모델 학습됨).")
-
-
-def _feature_importance(model):
-    estimator = model
-    if hasattr(estimator, "named_steps"):
-        estimator = estimator.named_steps.get("svc", estimator)
-    if hasattr(estimator, "feature_importances_"):
-        return estimator.feature_importances_
-    if hasattr(estimator, "coef_"):
-        return np.abs(estimator.coef_).mean(axis=0)
-    return None
-
-
-def cmd_diagnose(argv):
-    if joblib is None:
-        sys.exit(
-            "joblib이 설치되어 있지 않습니다. `pip install scikit-learn joblib pandas`로 설치하세요."
-        )
-    parser = argparse.ArgumentParser(description="부위별 feature importance 진단")
-    parser.add_argument("--model-dir", default="models")
-    parser.add_argument("--top", type=int, default=10)
-    args = parser.parse_args(argv)
-
-    for part in PARTS:
-        path = os.path.join(args.model_dir, f"{part}_classifier.joblib")
-        if not os.path.exists(path):
-            print(f"[{part}] 모델 없음: {path}")
-            continue
-        bundle = joblib.load(path)
-        importance = _feature_importance(bundle["model"])
-        columns = bundle["feature_columns"]
-        print(f"\n=== {part} | {bundle.get('model_name', '?')} ===")
-        if importance is None:
-            print(
-                "이 모델 계열은 직접적인 feature importance를 제공하지 않습니다. permutation importance를 별도 데이터셋으로 수행하는 것을 권장합니다."
-            )
-            continue
-        order = np.argsort(importance)[::-1][: args.top]
-        for idx in order:
-            print(f"{columns[idx]:32s} {importance[idx]:.6f}")
-
-
 def run_app():
     app_logic = CameraApp()
 
@@ -2615,9 +1949,6 @@ COMMANDS = {
     "calibrate": lambda argv: run_calibration(
         rgb_device_index=int(argv[0]) if argv else None
     ),
-    "collect": cmd_collect,
-    "train": cmd_train,
-    "diagnose": cmd_diagnose,
 }
 
 if __name__ == "__main__":

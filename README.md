@@ -12,15 +12,10 @@
 ## 주요 기능
 
 - **실시간 자세 분석**: MediaPipe Pose로 신체 랜드마크를 추출해 프레임마다 자세를 채점
-- **부위별 독립 ML 분류기**: 목/머리, 등/허리, 어깨, 골반에 대해 각각 독립적인 binary classifier를 사용
-- **구조적 shortcut learning 방지**: 각 분류기는 자기 부위에 해당하는 landmark subset만 입력으로 받음
-- **부위별 안전 fallback**: 모델이 없거나 로드/추론에 실패한 부위만 angle threshold 방식으로 자동 전환
-- **그룹 단위 학습 분리**: `person_id`를 기준으로 train / validation / test를 분리해 사람 단위 데이터 누수를 방지
+- **각도 threshold 기반 판정**: 목/머리, 등/허리, 어깨, 골반 각각에 대해 각도 threshold로 정상/위험을 판정
 - **RULA 참고 가중 종합점수**: 프로젝트용 heuristic weighting으로 목 25 / 몸통 30 / 어깨 30 / 골반 15를 기본값으로 사용
-- **다리 꼬기 휴리스틱 유지**: ML 학습 대상이 아니며 기존 선분 교차 기반 판정을 종합점수에 별도 감점으로 반영
-- **ML 기반 상세 리포트**: 리포트의 4개 progress bar와 값은 프레임별 ML/fallback 점수 평균을 사용
-- **feature importance 진단**: 4개 부위 모델의 주요 feature를 모델별로 출력하는 서브커맨드 제공
-- **Astra Pro 지원**: 기존 RGB + Depth / 3D skeleton 경로를 유지하며, 부위별 ML feature에도 가능한 경우 3D 좌표를 사용
+- **다리 꼬기 휴리스틱**: 기존 선분 교차 기반 판정을 종합점수에 별도 감점으로 반영
+- **Astra Pro 지원**: RGB + Depth / 3D skeleton 경로를 지원하며, 유효한 3D 좌표가 있으면 각도 계산에 3D 좌표를 사용
 - **Depth 조회 벡터화**: 랜드마크별 depth 최근접 탐색을 프레임당 1회의 `cv2.distanceTransform` 호출로 처리 (자세한 내용은 [Astra Pro depth 파이프라인](#astra-pro-3d-depth) 참고)
 
 ## 화면 구성
@@ -41,18 +36,12 @@
 
 ```text
 Pose-Report/
-├── main.py          # 앱 실행 + 데이터 수집/학습/진단 서브커맨드까지 전부 포함
+├── main.py          # 앱 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
 ├── index.html
 ├── script.js
 ├── style.css
-├── models/
-│   └── (학습 후 4개 .joblib + training_manifest.json 생성)
 └── README.md
 ```
-
-`collect_pose_data.py`, `train_pose_classifier.py`, `diagnose_feature_importance.py`,
-`pose_features.py`는 모두 `main.py` 안으로 통합되었습니다. 각 스크립트가 하던 일은
-아래 [서브커맨드](#서브커맨드-구조) 섹션의 `python main.py <command>` 형태로 그대로 실행할 수 있습니다.
 
 `frontend/` 아래 파일은 이 프로젝트의 개편 대상에서 제외합니다.
 
@@ -60,7 +49,6 @@ Pose-Report/
 
 ```bash
 pip install opencv-python mediapipe==0.10.9 pywebview numpy requests python-dotenv
-pip install scikit-learn joblib pandas
 ```
 
 Python 3.11.x 환경을 기준으로 작성되었습니다.
@@ -77,15 +65,11 @@ SUPABASE_ANON_KEY=여기에_Supabase_anon_key
 ## 서브커맨드 구조
 
 `main.py`는 인자 없이 실행하면 pywebview 앱을 띄우고, 첫 번째 인자로 아래 서브커맨드를 받으면
-해당 오프라인 파이프라인만 실행합니다. 각 서브커맨드는 기존 개별 스크립트와 동일한 옵션을
-그대로 지원합니다.
+해당 오프라인 파이프라인만 실행합니다.
 
 ```bash
 python main.py                # 기본: pywebview 앱 실행
 python main.py calibrate [카메라 인덱스]   # Astra Pro 스테레오 캘리브레이션
-python main.py collect --output pose_dataset.csv --person-id person_001
-python main.py train --data pose_dataset.csv --output-dir models
-python main.py diagnose --model-dir models --top 10
 ```
 
 ## 실행
@@ -94,140 +78,20 @@ python main.py diagnose --model-dir models --top 10
 python main.py
 ```
 
-## 데이터 수집: 기존 UI/라벨 방식 유지 (`python main.py collect`)
+## 자세 판정: 각도 threshold
 
-데이터 수집 UI는 숫자 키 1~5를 사용합니다.
-
-```text
-1 : normal
-2 : turtle_neck
-3 : slouch
-4 : shoulder_tilt
-5 : pelvis_tilt
-space : 일시정지
-q : 종료
-```
-
-사람 단위 누수를 막기 위해 수집 실행마다 `person_id`를 지정해야 하며,
-`session_id`는 실행마다 자동 생성됩니다.
-
-```bash
-python main.py collect --output pose_dataset.csv --person-id person_001
-```
-
-`--person-id`를 생략하면 실행 중 터미널에서 입력받습니다.
-
-```bash
-python main.py collect --output pose_dataset.csv
-```
-
-CSV에는 `source_label`과 함께 다음 4개의 이진 target이 저장됩니다.
+각 부위는 `CameraApp._threshold_quality`를 이용해 측정 각도와 threshold의 차이를
+0~100 점수로 변환합니다. 정상 영역은 90~100, 문제 영역은 0~89로 표현됩니다.
 
 ```text
-neck_label
-torso_label
-shoulder_label
-pelvis_label
+neck     → TURTLE_NECK_ANGLE_THRESHOLD, HEAD_TILT_ANGLE_THRESHOLD
+torso    → TORSO_ANGLE_THRESHOLD, SPINE_LEAN_ANGLE_THRESHOLD
+shoulder → SHOULDER_ANGLE_THRESHOLD
+pelvis   → PELVIS_ANGLE_THRESHOLD
 ```
 
-예를 들어 `turtle_neck`으로 수집한 행은 `neck_label=1`, 나머지는 0입니다.
-`normal`은 네 target이 모두 0입니다. 따라서 하나의 공통 CSV를 유지하면서도
-학습 시에는 네 개의 독립 binary dataset으로 해석할 수 있습니다.
-
-`session_id`, `person_id`, `frame_id`도 함께 저장됩니다. 같은 사람의 여러 세션은
-같은 `person_id`를 사용하고, 실행마다 새로운 `session_id`가 생깁니다.
-
-## 부위별 feature 설계
-
-각 classifier는 전체 33개 landmark를 입력하지 않습니다.
-
-| 분류기 | 입력 landmark |
-|---|---|
-| neck | nose, left/right eye, left/right ear, left/right shoulder |
-| torso | left/right shoulder, left/right hip |
-| shoulder | left/right shoulder, left/right elbow |
-| pelvis | left/right hip, left/right knee |
-
-각 부위 feature는 해당 부위의 anchor와 scale을 사용해 독립적으로 정규화합니다
-(`extract_part_feature_vector`). 실시간 추론과 학습 데이터 생성 모두 `main.py` 안의
-동일한 함수를 공유하므로 두 경로 간 feature 계산 방식이 어긋날 일이 없습니다.
-
-## 모델 학습 (`python main.py train`)
-
-```bash
-python main.py train --data pose_dataset.csv --output-dir models
-```
-
-학습 후에는 다음 파일이 생성됩니다.
-
-```text
-models/
-├── neck_classifier.joblib
-├── torso_classifier.joblib
-├── shoulder_classifier.joblib
-├── pelvis_classifier.joblib
-└── training_manifest.json
-```
-
-### 학습 안전장치
-
-단순 `train_test_split`을 사용하지 않고 `person_id`를 group으로 사용합니다.
-
-1. 전체 데이터를 사람 단위로 train / validation / test로 분리
-2. train 세트 내부에서 `GroupKFold`로 후보 모델 비교
-3. RandomForest와 SVM(RBF)을 비교한 뒤 각 부위에서 더 좋은 모델 선택
-4. validation / test 성능과 confusion matrix를 기록
-5. `training_manifest.json`에 사용된 사람 그룹과 모델 성능을 저장
-
-사람 수가 3명 미만이면 안전을 위해 학습을 중단합니다. 사람 구분 정보가 없는 구형 CSV는
-강제로 학습하지 않고 `python main.py collect`로 새 형식으로 다시 수집하도록 안내합니다.
-
-## 실시간 ML 점수 계산
-
-각 부위 모델은 binary class를 사용합니다.
-
-```text
-0 = 정상
-1 = 해당 부위 문제
-```
-
-모델의 확률과 binary prediction을 함께 사용해 다음 범위로 점수를 매핑합니다.
-
-```text
-정상 prediction  → 90~100점
-문제 prediction  → 0~89점
-```
-
-즉 확률을 단순히 `normal_probability * 100`으로 쓰지 않고, 모델이 어느 클래스를
-실제로 선택했는지와 0.5 기준선에서 얼마나 떨어져 있는지를 함께 반영합니다
-(`CameraApp._binary_ml_quality`).
-
-리포트의 4개 metric은 다음 값을 프레임별로 수집한 뒤 평균냅니다.
-
-```text
-neck_score
-torso_score
-shoulder_score
-pelvis_score
-```
-
-각 metric에는 내부적으로 `ml` 또는 `threshold` source도 함께 기록합니다.
-모델이 없는 부위는 다른 부위의 ML 사용 여부와 무관하게 그 부위만 threshold fallback이 됩니다.
-
-## Threshold fallback
-
-ML 모델이 없거나 로드/추론에 실패하면 해당 부위는 기존 각도 기반 threshold를 사용합니다
-(`CameraApp._threshold_quality`). Fallback 점수도 0~100 공통 스케일로 계산하고, 정상 영역은
-90~100, 문제 영역은 0~89로 표현되도록 맞춥니다.
-
-따라서 실행 중 모델 상태가 다음과 같아도 정상 동작합니다.
-
-```text
-neck     → ML
-torso    → ML
-shoulder → threshold fallback
-pelvis   → ML
-```
+리포트의 4개 metric(`neck_score`, `torso_score`, `shoulder_score`, `pelvis_score`)은
+이 점수를 프레임별로 수집한 뒤 평균냅니다.
 
 ### 임계값/가중치 기본값과 index.html 동기화 주의
 
@@ -252,29 +116,18 @@ RULA의 신체 부위 평가 우선순위를 참고한 heuristic weighting을 �
 | 골반 | 15 |
 
 프레임별 종합점수는 위 4개 점수의 가중평균으로 계산합니다.
-다리 꼬기가 감지된 프레임에는 기존 휴리스틱 감점을 별도로 적용합니다.
+다리 꼬기가 감지된 프레임에는 별도 감점을 추가로 적용합니다.
 
 ## 다리 꼬기
 
-다리 꼬기는 ML feature/label에 포함하지 않습니다. `main.py`의 선분 교차 기반
-`_detect_leg_cross()` (`is_intersect()` 이용) 결과를 그대로 사용하며, ML 사용 여부와
-관계없이 종합점수에 동일한 별도 감점을 적용합니다. 측정 결과에는 다리 꼬기 지속 시간도
+`main.py`의 선분 교차 기반 `_detect_leg_cross()` (`is_intersect()` 이용) 결과를 그대로
+사용해 종합점수에 별도 감점을 적용합니다. 측정 결과에는 다리 꼬기 지속 시간도
 함께 기록합니다.
-
-## Feature importance 진단 (`python main.py diagnose`)
-
-```bash
-python main.py diagnose --model-dir models --top 10
-```
-
-RandomForest는 내장 `feature_importances_`를, 선형 계열 모델은 가능한 경우 `coef_` 기반
-절대 영향도를 출력합니다. SVM(RBF)의 경우 직접적인 feature importance가 없으므로
-추후 별도의 permutation importance 분석을 권장합니다.
 
 ## Astra Pro (3D Depth)
 
-기존 Astra Pro 캡처/캘리브레이션 경로는 그대로 유지합니다. ML 추론 시 유효한 3D landmark가
-충분하면 3D 좌표를 부위별 feature 생성에 사용하고, 부족하면 기존 2D landmark를 사용합니다.
+Astra Pro 캡처/캘리브레이션 경로를 지원합니다. 유효한 3D landmark가 충분하면 3D 좌표로
+각도를 계산하고, 부족하면 기존 2D landmark로 계산합니다.
 
 캘리브레이션:
 
@@ -323,25 +176,10 @@ Astra Pro 프레임 처리 루프(`run_debug_skeleton_viewer`)는 매 프레임�
 
 ## AI 피드백
 
-측정 종료 후 종합 점수, 4개 ML/threshold metric, 다리 꼬기 지속 시간을 Gemini에 전달해
-한국어 코칭 피드백을 생성합니다. metric은 angle threshold 값을 리포트의 주 값으로 사용하지
-않고, 부위별 ML score를 중심으로 전달합니다.
+측정 종료 후 종합 점수, 4개 부위별 threshold metric, 다리 꼬기 지속 시간을 Gemini에
+전달해 한국어 코칭 피드백을 생성합니다.
 
 ## 알려진 제한사항
 
-- 새 binary 학습 데이터는 기존 UI의 단일 자세 라벨로 수집됩니다. 즉 동일 프레임에서 여러
-  문제를 동시에 직접 라벨링하는 UI는 없습니다. 내부 CSV 스키마는 네 binary target을
-  동시에 표현할 수 있도록 되어 있습니다.
-- 실제 모델의 예측 품질은 데이터 수와 사람/세션 다양성에 크게 좌우됩니다. 최소 3명보다 훨씬
-  많은 사람을 여러 세션에서 수집하는 것을 권장합니다.
-- Astra Pro 3D 데이터와 일반 웹캠 2D 데이터는 분포가 다르므로, 실제 사용 장치와 비슷한 방식으로
-  학습 데이터를 수집하는 것이 좋습니다.
 - 코드에는 주석을 두지 않는 것을 원칙으로 합니다. 동작을 바꾸는 수정을 할 때는 이 README의
   관련 섹션도 함께 갱신해 주세요.
-
-### CSV feature 컬럼 호환성
-
-`python main.py train`은 기존 수집 CSV의 `lm0_x`, `lm0_y`, `lm0_z` 형식을 그대로 사용합니다.
-부위별 모델은 `main.py`의 `PART_LANDMARKS`에 지정된 landmark 컬럼만 선택합니다.
-따라서 기존 `pose_dataset_binary_grouped.csv`처럼 원본 landmark 컬럼을 가진 CSV를 바로 학습에
-사용할 수 있습니다.
