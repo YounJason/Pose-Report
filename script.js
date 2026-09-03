@@ -192,60 +192,17 @@ async function showScreen(index, useFade = true) {
             } catch (e) {
                 generatedLLMAdvice = "AI 피드백을 생성하는 중 오류가 발생했습니다.";
             }
-            helptext.innerText = "리포트를 업로드 하는 중...";
-            try {
-                if (window.pywebview?.api?.get_supabase_key && currentUuid) {
-                    const anonKey = await window.pywebview.api.get_supabase_key();
-                    const updateUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${currentUuid}`;
-
-                    const thresholds = {
-                        turtle: parseFloat(document.getElementById('cfg-turtle').value) || 18.0,
-                        torso: parseFloat(document.getElementById('cfg-torso').value) || 28.0,
-                        shoulder: parseFloat(document.getElementById('cfg-shoulder').value) || 8.0,
-                        pelvis: parseFloat(document.getElementById('cfg-pelvis').value) || 7.0,
-                        head: parseFloat(document.getElementById('cfg-head').value) || 5.0,
-                        spine: parseFloat(document.getElementById('cfg-spine').value) || 8.0
-                    };
-
-                    const payload = {
-                        result: {
-                            metrics: finalReportData,
-                            advice: generatedLLMAdvice
-                        }
-                    };
-
-                    await fetch(updateUrl, {
-                        method: 'PATCH',
-                        headers: {
-                            'apikey': anonKey,
-                            'Authorization': `Bearer ${anonKey}`,
-                            'Content-Type': 'application/json',
-                            'Prefer': 'return=minimal'
-                        },
-                        body: JSON.stringify(payload)
-                    });
-                }
-            } catch (err) {
-                console.error(err);
-            }
             showScreen(6, true);
         })();
     }
 
     if (currentIndex === 6) {
-        try {
-            const qrDownloadContainer = document.getElementById("qrcode-download");
-            if (qrDownloadContainer) {
-                qrDownloadContainer.innerHTML = "";
-                const resultQrUrl = `https://focus-fit-ai.vercel.app/result/#${currentUuid}`;
-                new QRCode(qrDownloadContainer, {
-                    text: resultQrUrl,
-                    width: 200,
-                    height: 200
-                });
-            }
-        } catch (err) {
-            console.error(err);
+        const reportDateEl = document.getElementById('report-date');
+        if (reportDateEl) {
+            reportDateEl.innerText = new Date().toLocaleString('ko-KR', {
+                year: 'numeric', month: 'long', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
         }
 
         document.querySelectorAll('.progress-bar-fill').forEach(bar => bar.style.width = '0%');
@@ -371,6 +328,7 @@ document.getElementById('btn-save').addEventListener('click', () => {
 
 document.getElementById('btn-start').addEventListener('click', () => showScreen(3, true));
 document.getElementById('btn-restart').addEventListener('click', () => showScreen(2, true));
+document.getElementById('btn-print').addEventListener('click', () => window.print());
 
 // Called from the Python backend once the (webcam or Astra) camera has
 // delivered its first frame, i.e. the 3D camera load triggered on the

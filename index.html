@@ -7,9 +7,9 @@
     <title>Pose Report</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" media="print" onload="this.media='all'">
     <link rel="stylesheet" href="style.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="vendor/qrcode.min.js" defer></script>
 </head>
 
 <body>
@@ -87,8 +87,13 @@
         <div class="screen" id="screen-6">
             <div class="report-container">
                 <header class="report-header">
-                    <h1>리포트를 생성했습니다!</h1>
-                    <button class="btn" id="btn-restart">처음으로 돌아가기</button>
+                    <div class="report-title-group">
+                        <h1 class="report-title-hidden">리포트를 생성했습니다!</h1>
+                        <p class="report-date" id="report-date"></p>
+                    </div>
+                    <div class="report-header-actions no-print">
+                        <button class="btn" id="btn-restart">처음으로 돌아가기</button>
+                    </div>
                 </header>
 
                 <div class="report-grid">
@@ -151,8 +156,14 @@
                         </div>
                     </div>
 
-                    <div class="report-card action-card">
-                        <div id="qrcode-download" class="qr-target qr-target-download"></div>
+                    <div class="report-card action-card no-print">
+                        <svg class="print-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M6 9V2H18V9" stroke="#1a73e8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M6 18H4C3.44772 18 3 17.5523 3 17V11C3 10.4477 3.44772 10 4 10H20C20.5523 10 21 10.4477 21 11V17C21 17.5523 20.5523 18 20 18H18" stroke="#1a73e8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                            <rect x="6" y="14" width="12" height="8" stroke="#1a73e8" stroke-width="1.6" stroke-linejoin="round"/>
+                        </svg>
+                        <p class="help-text">리포트를 A4 용지로 인쇄해서 받아보실 수 있습니다.</p>
+                        <button class="btn" id="btn-print">리포트 인쇄하기</button>
                     </div>
 
                     <div class="report-card advice-card">
@@ -162,6 +173,10 @@
                         <p class="help-text">AI는 실수를 할 수 있습니다. 해당 내용은 전문 의료인의 조언을 대체하지 않습니다.</p>
                     </div>
                 </div>
+
+                <footer class="report-footer">
+                    <p>내성고등학교 인공지능 코딩 동아리 포커스 핏 AI</p>
+                </footer>
             </div>
         </div>
     </div>

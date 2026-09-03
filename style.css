@@ -176,11 +176,6 @@ p {
     height: 100% !important;
 }
 
-.qr-target-download {
-    width: 200px;
-    height: 200px;
-}
-
 .camera-layout {
     display: flex;
     flex-direction: column;
@@ -363,6 +358,27 @@ h1 {
     align-items: center;
 }
 
+.report-title-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.report-title-hidden {
+    display: none;
+}
+
+.report-date {
+    font-size: 1rem;
+    color: #70757a;
+    text-align: left;
+}
+
+.report-header-actions {
+    display: flex;
+    gap: 12px;
+}
+
 .report-grid {
     flex: 1;
     display: grid;
@@ -510,19 +526,17 @@ h1 {
     grid-row: 2 / 3;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    background: #ffffff;
+    gap: 14px;
+    background: #f8f9fa;
 }
 
-.qr-target-download {
-    width: clamp(130px, 18vh, 180px) !important;
-    height: clamp(130px, 18vh, 180px) !important;
+.print-icon {
+    width: 56px;
+    height: 56px;
 }
 
-.qr-target-download canvas,
-.qr-target-download img {
-    width: 100% !important;
-    height: 100% !important;
+.action-card .help-text {
+    text-align: center;
 }
 
 .help-text {
@@ -552,4 +566,161 @@ h1 {
     justify-content: flex-start;
     white-space: pre-wrap;
     overflow-y: auto;
+}
+
+.report-footer {
+    text-align: center;
+    padding-top: 4px;
+}
+
+.report-footer p {
+    font-size: 0.9rem;
+    color: #9aa0a6;
+    text-align: center;
+}
+
+@media print {
+    @page {
+        size: A4;
+        margin: 14mm 16mm;
+    }
+
+    html, body {
+        background: #ffffff !important;
+        width: auto;
+        height: auto;
+        overflow: visible !important;
+    }
+
+    #app {
+        position: static;
+        width: auto;
+        height: auto;
+    }
+
+    .screen {
+        display: none !important;
+    }
+
+    #screen-6.active {
+        display: block !important;
+        position: static !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        width: auto !important;
+        height: auto !important;
+        padding: 0 !important;
+    }
+
+    .no-print {
+        display: none !important;
+    }
+
+    * {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        box-shadow: none !important;
+    }
+
+    .report-container {
+        width: 100%;
+        height: auto;
+        max-width: 100%;
+        gap: 6mm;
+    }
+
+    .report-header {
+        align-items: flex-start;
+        margin-bottom: 2mm;
+    }
+
+    h1 {
+        font-size: 19pt;
+        margin-bottom: 2mm;
+    }
+
+    .report-date {
+        font-size: 10pt;
+    }
+
+    .report-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 6mm;
+    }
+
+    .report-card {
+        border: 1px solid #d5d8dc;
+        border-radius: 4mm;
+        padding: 6mm 7mm;
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
+
+    .report-card h2 {
+        font-size: 13pt;
+        margin-bottom: 4mm;
+    }
+
+    .score-card {
+        order: 1;
+        min-height: 0;
+    }
+
+    .metrics-card {
+        order: 2;
+        min-height: 0;
+    }
+
+    .advice-card {
+        order: 3;
+        min-width: 0;
+    }
+
+    .score-circle-wrapper {
+        width: 46mm;
+        height: 46mm;
+    }
+
+    .score-num {
+        font-size: 22pt;
+    }
+
+    .score-total {
+        font-size: 9pt;
+    }
+
+    .metric-label {
+        font-size: 10.5pt;
+    }
+
+    .metric-value {
+        font-size: 10.5pt;
+    }
+
+    .progress-bar-bg {
+        height: 3mm;
+    }
+
+    .advice-content {
+        font-size: 10.5pt;
+        line-height: 1.6;
+        border: none;
+        background: #f8f9fa;
+        overflow: visible;
+        padding: 5mm;
+    }
+
+    .help-text {
+        font-size: 8.5pt;
+    }
+
+    .report-footer {
+        margin-top: 4mm;
+        padding-top: 0;
+    }
+
+    .report-footer p {
+        font-size: 8pt;
+    }
 }

@@ -31,6 +31,8 @@ LEFT_HIP = 23
 RIGHT_HIP = 24
 LEFT_KNEE = 25
 RIGHT_KNEE = 26
+LEFT_ANKLE = 27
+RIGHT_ANKLE = 28
 
 PART_LANDMARKS = {
     "neck": [
@@ -55,6 +57,55 @@ PART_KOREAN = {
 }
 
 PARTS = tuple(PART_LANDMARKS.keys())
+
+# 매 프레임(초당 최대 30회) 호출되는 포즈 분석 경로에서 매번 리스트/딕셔너리를
+# 새로 만들지 않도록 모듈 로드 시 한 번만 계산해서 재사용한다.
+_REQUIRED_LANDMARKS_2D = (
+    NOSE,
+    LEFT_EAR,
+    RIGHT_EAR,
+    LEFT_SHOULDER,
+    RIGHT_SHOULDER,
+    LEFT_HIP,
+    RIGHT_HIP,
+    LEFT_KNEE,
+    RIGHT_KNEE,
+    LEFT_ANKLE,
+    RIGHT_ANKLE,
+)
+
+_ANGLE_LANDMARKS_3D = (
+    LEFT_EAR,
+    RIGHT_EAR,
+    LEFT_SHOULDER,
+    RIGHT_SHOULDER,
+    LEFT_HIP,
+    RIGHT_HIP,
+)
+
+_ZERO_METRIC_SCORES = {p: 0 for p in PARTS}
+_THRESHOLD_METRIC_SOURCES = {p: "threshold" for p in PARTS}
+
+
+def _not_detected_result():
+    """포즈/필수 랜드마크가 인식되지 않았을 때 공통으로 반환하는 결과.
+
+    기존에는 동일한 10-튜플(및 내부 dict 2개)이 5곳에서 매 프레임마다
+    새로 생성되었다. 값 자체는 불변이므로 dict는 모듈 로드 시 한 번만
+    만들어 재사용하고, 튜플만 함수 호출 시 조립한다.
+    """
+    return (
+        "인식되지 않음",
+        2,
+        0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        False,
+        _ZERO_METRIC_SCORES,
+        _THRESHOLD_METRIC_SOURCES,
+    )
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, ".env")
@@ -104,31 +155,18 @@ def _axis_deviation_deg(v, axis):
 
 
 def _detect_leg_cross(landmarks, w, h):
+    # enum(mp_pose.PoseLandmark) 속성 접근 대신 모듈 상단의 정수 상수를 바로
+    # 인덱스로 사용해 매 프레임(최대 초당 30회) 반복되는 속성 조회 비용을 줄인다.
+    def pt(idx):
+        lm = landmarks[idx]
+        return (int(lm.x * w), int(lm.y * h))
 
-    left_hip = (
-        int(landmarks[mp_pose.PoseLandmark.LEFT_HIP].x * w),
-        int(landmarks[mp_pose.PoseLandmark.LEFT_HIP].y * h),
-    )
-    right_hip = (
-        int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].x * w),
-        int(landmarks[mp_pose.PoseLandmark.RIGHT_HIP].y * h),
-    )
-    left_knee = (
-        int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE].x * w),
-        int(landmarks[mp_pose.PoseLandmark.LEFT_KNEE].y * h),
-    )
-    right_knee = (
-        int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].x * w),
-        int(landmarks[mp_pose.PoseLandmark.RIGHT_KNEE].y * h),
-    )
-    left_ankle = (
-        int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].x * w),
-        int(landmarks[mp_pose.PoseLandmark.LEFT_ANKLE].y * h),
-    )
-    right_ankle = (
-        int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].x * w),
-        int(landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE].y * h),
-    )
+    left_hip = pt(LEFT_HIP)
+    right_hip = pt(RIGHT_HIP)
+    left_knee = pt(LEFT_KNEE)
+    right_knee = pt(RIGHT_KNEE)
+    left_ankle = pt(LEFT_ANKLE)
+    right_ankle = pt(RIGHT_ANKLE)
 
     return (
         is_intersect(left_hip, left_knee, right_hip, right_knee)
@@ -1115,6 +1153,13 @@ class CameraApp:
         self.cap = None
         self.lock = threading.Lock()
 
+        # 캡처가 비활성 상태일 때 매 10ms마다 깨어나 폴링하는 대신, 이벤트로
+        # 대기하다가 활성화되는 즉시 깨어나도록 한다 (불필요한 wake-up 제거).
+        self._capture_active_event = threading.Event()
+        # Astra 스레드가 새 프레임을 넣었을 때 즉시 깨어나기 위한 이벤트.
+        # 기존에는 10ms 간격으로 계속 폴링했다.
+        self._astra_frame_event = threading.Event()
+
         self.TURTLE_NECK_ANGLE_THRESHOLD = 18.0
         self.TORSO_ANGLE_THRESHOLD = 28.0
         self.SHOULDER_ANGLE_THRESHOLD = 8.0
@@ -1213,6 +1258,7 @@ class CameraApp:
                 self.cap.release()
                 self.cap = None
             self.capture_active = True
+        self._capture_active_event.set()
 
         if self.camera_source == "astra":
             self._start_astra_capture()
@@ -1300,41 +1346,18 @@ class CameraApp:
 
     def _analyze_pose(self, landmarks, w, h):
 
-        required_landmarks = [
-            mp_pose.PoseLandmark.NOSE,
-            mp_pose.PoseLandmark.LEFT_EAR,
-            mp_pose.PoseLandmark.RIGHT_EAR,
-            mp_pose.PoseLandmark.LEFT_SHOULDER,
-            mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            mp_pose.PoseLandmark.LEFT_HIP,
-            mp_pose.PoseLandmark.RIGHT_HIP,
-            mp_pose.PoseLandmark.LEFT_KNEE,
-            mp_pose.PoseLandmark.RIGHT_KNEE,
-            mp_pose.PoseLandmark.LEFT_ANKLE,
-            mp_pose.PoseLandmark.RIGHT_ANKLE,
-        ]
+        if any(
+            landmarks[lm].visibility < 0.5 for lm in _REQUIRED_LANDMARKS_2D
+        ):
+            return _not_detected_result()
 
-        if any(landmarks[lm].visibility < 0.5 for lm in required_landmarks):
-            return (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
-
-        nose = landmarks[mp_pose.PoseLandmark.NOSE]
-        left_ear = landmarks[mp_pose.PoseLandmark.LEFT_EAR]
-        right_ear = landmarks[mp_pose.PoseLandmark.RIGHT_EAR]
-        left_shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER]
-        right_shoulder = landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-        left_hip_lm = landmarks[mp_pose.PoseLandmark.LEFT_HIP]
-        right_hip_lm = landmarks[mp_pose.PoseLandmark.RIGHT_HIP]
+        nose = landmarks[NOSE]
+        left_ear = landmarks[LEFT_EAR]
+        right_ear = landmarks[RIGHT_EAR]
+        left_shoulder = landmarks[LEFT_SHOULDER]
+        right_shoulder = landmarks[RIGHT_SHOULDER]
+        left_hip_lm = landmarks[LEFT_HIP]
+        right_hip_lm = landmarks[RIGHT_HIP]
 
         ls_x, ls_y = left_shoulder.x * w, left_shoulder.y * h
         rs_x, rs_y = right_shoulder.x * w, right_shoulder.y * h
@@ -1407,70 +1430,27 @@ class CameraApp:
 
     def _analyze_pose_3d(self, landmarks, points3d, valid, w, h):
 
-        required_landmarks = [
-            mp_pose.PoseLandmark.NOSE,
-            mp_pose.PoseLandmark.LEFT_EAR,
-            mp_pose.PoseLandmark.RIGHT_EAR,
-            mp_pose.PoseLandmark.LEFT_SHOULDER,
-            mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            mp_pose.PoseLandmark.LEFT_HIP,
-            mp_pose.PoseLandmark.RIGHT_HIP,
-            mp_pose.PoseLandmark.LEFT_KNEE,
-            mp_pose.PoseLandmark.RIGHT_KNEE,
-            mp_pose.PoseLandmark.LEFT_ANKLE,
-            mp_pose.PoseLandmark.RIGHT_ANKLE,
-        ]
         if landmarks is None or any(
-            landmarks[lm].visibility < 0.5 for lm in required_landmarks
+            landmarks[lm].visibility < 0.5 for lm in _REQUIRED_LANDMARKS_2D
         ):
-            return (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+            return _not_detected_result()
 
-        angle_landmarks_3d = [
-            mp_pose.PoseLandmark.LEFT_EAR,
-            mp_pose.PoseLandmark.RIGHT_EAR,
-            mp_pose.PoseLandmark.LEFT_SHOULDER,
-            mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            mp_pose.PoseLandmark.LEFT_HIP,
-            mp_pose.PoseLandmark.RIGHT_HIP,
-        ]
         if (
             points3d is None
             or valid is None
-            or any(not valid[lm.value] for lm in angle_landmarks_3d)
+            or any(not valid[lm] for lm in _ANGLE_LANDMARKS_3D)
         ):
-            return (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+            return _not_detected_result()
 
         def p3(lm):
-            return points3d[lm.value].astype(np.float64)
+            return points3d[lm].astype(np.float64)
 
-        le3d = p3(mp_pose.PoseLandmark.LEFT_EAR)
-        re3d = p3(mp_pose.PoseLandmark.RIGHT_EAR)
-        ls3d = p3(mp_pose.PoseLandmark.LEFT_SHOULDER)
-        rs3d = p3(mp_pose.PoseLandmark.RIGHT_SHOULDER)
-        lh3d = p3(mp_pose.PoseLandmark.LEFT_HIP)
-        rh3d = p3(mp_pose.PoseLandmark.RIGHT_HIP)
+        le3d = p3(LEFT_EAR)
+        re3d = p3(RIGHT_EAR)
+        ls3d = p3(LEFT_SHOULDER)
+        rs3d = p3(RIGHT_SHOULDER)
+        lh3d = p3(LEFT_HIP)
+        rh3d = p3(RIGHT_HIP)
 
         mid_ear = (le3d + re3d) / 2.0
         mid_shoulder = (ls3d + rs3d) / 2.0
@@ -1567,13 +1547,16 @@ class CameraApp:
     def start_camera_thread(self):
 
         while self.running:
-            time.sleep(0.01)
             if not self.capture_active:
                 with self.lock:
                     if self.cap:
                         self.cap.release()
                         self.cap = None
-                time.sleep(0.2)
+                self._capture_active_event.clear()
+                # 10ms 폴링 대신, capture_active가 True가 될 때(setup_and_start)
+                # 또는 종료될 때 즉시 깨어난다. 타임아웃은 running 플래그를
+                # 주기적으로 재확인하기 위한 안전장치일 뿐이다.
+                self._capture_active_event.wait(timeout=0.5)
                 continue
 
             if self.camera_source == "astra":
@@ -1581,7 +1564,10 @@ class CameraApp:
                     pending = self._debug_latest_frame
                     self._debug_latest_frame = None
                 if pending is None:
-                    time.sleep(0.01)
+                    # 새 Astra 프레임이 도착하면 _on_astra_frame이 이 이벤트를
+                    # set()하여 즉시 깨운다. 10ms 폴링 제거.
+                    self._astra_frame_event.wait(timeout=0.5)
+                    self._astra_frame_event.clear()
                     continue
                 if self.camera_enabled:
                     frame, landmarks, w, h, points3d, valid = pending
@@ -1590,11 +1576,16 @@ class CameraApp:
                     )
                 continue
 
-            with self.lock:
-                if self.cap is None or not self.cap.isOpened():
-                    self.cap = cv2.VideoCapture(self.current_camera_idx)
-                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
-                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
+            # cap이 이미 열려 있는 정상 경로에서는 매 프레임 락을 잡지 않고
+            # 먼저 락 없이 확인한 뒤, 실제로 (재)생성이 필요할 때만 락을 잡는다
+            # (double-checked locking) — 초당 수십 회 반복되는 핫패스에서
+            # 불필요한 락 획득/해제 비용을 없앤다.
+            if self.cap is None or not self.cap.isOpened():
+                with self.lock:
+                    if self.cap is None or not self.cap.isOpened():
+                        self.cap = cv2.VideoCapture(self.current_camera_idx)
+                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
+                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
 
             success, frame = self.cap.read()
             if not success:
@@ -1638,18 +1629,7 @@ class CameraApp:
                     leg_cross,
                     metric_scores,
                     metric_sources,
-                ) = (
-                    "인식되지 않음",
-                    2,
-                    0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    False,
-                    {p: 0 for p in PARTS},
-                    {p: "threshold" for p in PARTS},
-                )
+                ) = _not_detected_result()
             self._push_frame_to_webview(
                 frame,
                 status_text,
@@ -1696,18 +1676,7 @@ class CameraApp:
                 leg_cross,
                 metric_scores,
                 metric_sources,
-            ) = (
-                "인식되지 않음",
-                2,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                False,
-                {p: 0 for p in PARTS},
-                {p: "threshold" for p in PARTS},
-            )
+            ) = _not_detected_result()
 
         self._push_frame_to_webview(
             frame,
@@ -1783,6 +1752,7 @@ class CameraApp:
             self._debug_latest_frame = (frame, landmarks, w, h, points3d, valid)
 
         self._debug_first_frame_event.set()
+        self._astra_frame_event.set()
         self._notify_camera_ready()
 
     def change_camera(self, index):
@@ -1795,6 +1765,7 @@ class CameraApp:
     def on_closing(self):
         self.running = False
         self.capture_active = False
+        self._capture_active_event.set()  # 종료 시 대기 중인 루프를 즉시 깨움
         self._stop_astra_capture()
 
         if self._astra_precreated is not None:
@@ -1940,6 +1911,26 @@ def run_app():
             print(f"[window] show() 실패: {e}")
 
     app_logic.window.events.loaded += _on_loaded
+
+    def _window_show_watchdog():
+        # index.html이 외부 리소스(Google Fonts 등) 로드 지연/네트워크 차단으로
+        # 'loaded' 이벤트를 못 받으면 hidden=True 창이 영원히 안 보이는 채로
+        # "먹통"처럼 보일 수 있다. 일정 시간 안에 로드가 끝나지 않으면
+        # 진단 메시지를 남기고 강제로 창을 띄운다 (흰 화면이라도 원인 파악 가능).
+        if app_logic.window_loaded.wait(timeout=15):
+            return
+        print(
+            "[window][경고] 15초 안에 페이지 로드가 끝나지 않았습니다. "
+            "네트워크 연결(Google Fonts 등 외부 리소스) 문제일 수 있습니다. "
+            "창을 강제로 표시합니다.",
+            flush=True,
+        )
+        try:
+            app_logic.window.show()
+        except Exception as e:
+            print(f"[window] 강제 show() 실패: {e}")
+
+    threading.Thread(target=_window_show_watchdog, daemon=True).start()
     threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
     webview.start()
 
