@@ -172,27 +172,6 @@ Astra Pro 프레임 처리 루프(`run_debug_skeleton_viewer`)는 매 프레임�
 `batch_backproject_points`). 랜드마크별 Python 루프 자체가 사라지므로 사람이 화면에
 가득 잡혀 유효 landmark 수가 많을수록, 그리고 depth 구멍이 많을수록 상대적 이득이 커집니다.
 
-### 창이 뜨지 않고 멈추는 문제 (외부 리소스 로드 지연)
-
-Astra Pro 메인 스레드 사전 초기화가 성공적으로 끝난 직후 프로그램이 완전히 먹통처럼
-보이는 문제가 보고되었습니다. 원인은 `index.html`의 `<head>`가 외부 네트워크 리소스
-(Google Fonts, 그리고 과거에는 cdnjs의 `qrcode.min.js`)를 동기적으로 불러오고 있었기
-때문입니다. `run_app()`은 창을 `hidden=True`로 생성한 뒤 `loaded` 이벤트가 와야
-`window.show()`를 호출하는데, 학교/기관 네트워크 방화벽이 해당 도메인을 막거나 DNS가
-지연되면 `loaded` 이벤트가 영원히 오지 않아 창이 숨겨진 채로 멈춘 것처럼 보입니다.
-콘솔에는 파이썬 쪽 예외가 전혀 없으므로 Astra 초기화 로그가 마지막으로 출력된 뒤
-아무 것도 안 찍히는 것처럼 보이는 것도 이 때문입니다.
-
-대응:
-
-- `qrcode.min.js`는 `vendor/qrcode.min.js`로 로컬에 내려받아 CDN 의존성을 제거했습니다.
-- Google Fonts `<link rel="stylesheet">`는 `media="print" onload="this.media='all'"`
-  패턴으로 렌더링을 막지 않도록(non-blocking) 변경했습니다.
-- `run_app()`에 워치독 스레드를 추가해, 15초 안에 `loaded` 이벤트가 오지 않으면
-  진단 메시지를 남기고 창을 강제로 표시합니다. 완전한 해결책은 아니지만, 같은 문제가
-  다시 발생해도 화면이 하얗게라도 보이므로 "완전히 먹통"처럼 느껴지지 않고 원인 파악이
-  쉬워집니다.
-
 ## AI 피드백
 
 측정 종료 후 종합 점수, 4개 부위별 threshold metric, 다리 꼬기 지속 시간을 Gemini에

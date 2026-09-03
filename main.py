@@ -1911,26 +1911,6 @@ def run_app():
             print(f"[window] show() 실패: {e}")
 
     app_logic.window.events.loaded += _on_loaded
-
-    def _window_show_watchdog():
-        # index.html이 외부 리소스(Google Fonts 등) 로드 지연/네트워크 차단으로
-        # 'loaded' 이벤트를 못 받으면 hidden=True 창이 영원히 안 보이는 채로
-        # "먹통"처럼 보일 수 있다. 일정 시간 안에 로드가 끝나지 않으면
-        # 진단 메시지를 남기고 강제로 창을 띄운다 (흰 화면이라도 원인 파악 가능).
-        if app_logic.window_loaded.wait(timeout=15):
-            return
-        print(
-            "[window][경고] 15초 안에 페이지 로드가 끝나지 않았습니다. "
-            "네트워크 연결(Google Fonts 등 외부 리소스) 문제일 수 있습니다. "
-            "창을 강제로 표시합니다.",
-            flush=True,
-        )
-        try:
-            app_logic.window.show()
-        except Exception as e:
-            print(f"[window] 강제 show() 실패: {e}")
-
-    threading.Thread(target=_window_show_watchdog, daemon=True).start()
     threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
     webview.start()
 
