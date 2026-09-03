@@ -224,17 +224,6 @@ p {
     object-fit: cover;
 }
 
-.reels-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    background-color: #000000;
-}
-
-.reels-overlay.hidden {
-    display: none;
-}
-
 .status-overlay {
     position: absolute;
     bottom: 20px;
@@ -246,7 +235,6 @@ p {
     font-weight: 500;
     transition: background-color 0.3s;
     text-align: center;
-    z-index: 2;
 }
 
 .status-normal {
@@ -264,15 +252,6 @@ p {
     color: #3c4043;
 }
 
-.status-not-seated {
-    background-color: rgba(255, 244, 229, 0.95);
-    color: #b06000;
-}
-
-.status-overlay.hidden {
-    display: none;
-}
-
 .timer-badge {
     position: absolute;
     top: 20px;
@@ -284,7 +263,6 @@ p {
     font-size: 1.5rem;
     font-weight: 700;
     letter-spacing: 0.5px;
-    z-index: 2;
 }
 
 .precountdown-overlay {
@@ -547,43 +525,6 @@ h1 {
     height: 100% !important;
 }
 
-.print-btn {
-    background-color: #202124;
-}
-
-.print-btn:hover {
-    background-color: #3c4043;
-}
-
-.instagram-login-group {
-    margin-bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-}
-
-.instagram-login-desc {
-    text-align: left;
-    font-size: 0.9rem;
-    margin: 0;
-}
-
-.instagram-login-btn {
-    background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
-    color: #ffffff;
-    border: none;
-    border-radius: 24px;
-    padding: 10px 24px;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.instagram-login-btn:hover {
-    filter: brightness(1.05);
-}
-
 .help-text {
     color: gray;
     font-size: 1rem;
@@ -611,118 +552,4 @@ h1 {
     justify-content: flex-start;
     white-space: pre-wrap;
     overflow-y: auto;
-}
-/* ---------------------------------------------------------------------- */
-/* Print layout: report screen (screen-6) fitted onto a single A4 page.   */
-/* ---------------------------------------------------------------------- */
-
-@page {
-    size: A4 portrait;
-    margin: 12mm;
-}
-
-@media print {
-
-    .no-print {
-        display: none !important;
-    }
-
-    html, body {
-        width: 210mm;
-        height: 297mm;
-        background: #ffffff !important;
-    }
-
-    #app {
-        position: static !important;
-    }
-
-    .screen {
-        position: static !important;
-        opacity: 1 !important;
-        visibility: visible !important;
-        display: none !important;
-        padding: 0 !important;
-        width: auto !important;
-        height: auto !important;
-    }
-
-    #screen-6.active {
-        display: block !important;
-    }
-
-    #screen-6 {
-        padding: 0 !important;
-    }
-
-    .report-container {
-        width: 100%;
-        height: auto;
-        max-width: none;
-        gap: 10px;
-    }
-
-    h1 {
-        font-size: 1.5rem;
-    }
-
-    .report-header {
-        margin-bottom: 6px;
-    }
-
-    .report-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        grid-template-rows: auto auto;
-        gap: 10px;
-        min-height: 0;
-    }
-
-    .report-card {
-        box-shadow: none;
-        border: 1px solid #ccc;
-        border-radius: 8px;
-        padding: 12px 14px;
-        break-inside: avoid;
-    }
-
-    .report-card h2 {
-        font-size: 1rem;
-        margin-bottom: 8px;
-    }
-
-    .metrics-card {
-        min-height: 0;
-    }
-
-    .metric-label {
-        font-size: 0.9rem;
-    }
-
-    .metric-value {
-        font-size: 0.85rem;
-    }
-
-    .progress-bar-bg {
-        height: 8px;
-    }
-
-    .score-num {
-        font-size: 2.2rem;
-    }
-
-    .score-total {
-        font-size: 0.9rem;
-    }
-
-    .advice-content {
-        font-size: 0.85rem;
-        line-height: 1.5;
-        padding: 10px;
-        overflow: visible;
-    }
-
-    .help-text {
-        font-size: 0.7rem;
-    }
 }

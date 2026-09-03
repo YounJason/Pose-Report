@@ -62,7 +62,6 @@ async function showScreen(index, useFade = true) {
         preCountdownTimeout = null;
         sittingConfirmed = false;
         if (window.pywebview) window.pywebview.api.toggle_camera(false);
-        hideReelsIframe();
     }
 
     if (currentIndex === 3) clearInterval(privacyPollInterval);
@@ -152,10 +151,6 @@ async function showScreen(index, useFade = true) {
         sittingConfirmed = false;
         hidePreCountdown();
 
-        const statusBoxEl = document.getElementById('status-box');
-        if (statusBoxEl) statusBoxEl.classList.remove('hidden');
-        hideReelsIframe();
-
         const timerEl = document.getElementById('timer');
         timerEl.innerText = "30";
 
@@ -168,8 +163,6 @@ async function showScreen(index, useFade = true) {
 
             if (timeLeft <= 0) {
                 clearInterval(countdownInterval);
-
-                hideReelsIframe();
 
                 const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
                 const dominantSource = arr => {
@@ -212,14 +205,62 @@ async function showScreen(index, useFade = true) {
             } catch (e) {
                 generatedLLMAdvice = "AI 피드백을 생성하는 중 오류가 발생했습니다.";
             }
-            // NOTE: the measurement result is intentionally never uploaded to
-            // Supabase. The report is only ever shown locally and printed
-            // (see screen 6 / btn-print), never persisted to the DB.
+            helptext.innerText = "리포트를 업로드 하는 중...";
+            try {
+                if (window.pywebview?.api?.get_supabase_key && currentUuid) {
+                    const anonKey = await window.pywebview.api.get_supabase_key();
+                    const updateUrl = `${SUPABASE_URL}/rest/v1/main?uuid=eq.${currentUuid}`;
+
+                    const thresholds = {
+                        turtle: parseFloat(document.getElementById('cfg-turtle').value) || 18.0,
+                        torso: parseFloat(document.getElementById('cfg-torso').value) || 28.0,
+                        shoulder: parseFloat(document.getElementById('cfg-shoulder').value) || 8.0,
+                        pelvis: parseFloat(document.getElementById('cfg-pelvis').value) || 7.0,
+                        head: parseFloat(document.getElementById('cfg-head').value) || 5.0,
+                        spine: parseFloat(document.getElementById('cfg-spine').value) || 8.0
+                    };
+
+                    const payload = {
+                        result: {
+                            metrics: finalReportData,
+                            advice: generatedLLMAdvice
+                        }
+                    };
+
+                    await fetch(updateUrl, {
+                        method: 'PATCH',
+                        headers: {
+                            'apikey': anonKey,
+                            'Authorization': `Bearer ${anonKey}`,
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=minimal'
+                        },
+                        body: JSON.stringify(payload)
+                    });
+                }
+            } catch (err) {
+                console.error(err);
+            }
             showScreen(6, true);
         })();
     }
 
     if (currentIndex === 6) {
+        try {
+            const qrDownloadContainer = document.getElementById("qrcode-download");
+            if (qrDownloadContainer) {
+                qrDownloadContainer.innerHTML = "";
+                const resultQrUrl = `https://pose-report.netlify.app/result/#${currentUuid}`;
+                new QRCode(qrDownloadContainer, {
+                    text: resultQrUrl,
+                    width: 200,
+                    height: 200
+                });
+            }
+        } catch (err) {
+            console.error(err);
+        }
+
         document.querySelectorAll('.progress-bar-fill').forEach(bar => bar.style.width = '0%');
         const scoreRing = document.getElementById('score-ring-progress');
         if (scoreRing) scoreRing.style.strokeDashoffset = '314';
@@ -345,16 +386,6 @@ document.getElementById('btn-save').addEventListener('click', () => {
 document.getElementById('btn-start').addEventListener('click', () => showScreen(3, true));
 document.getElementById('btn-restart').addEventListener('click', () => showScreen(2, true));
 
-document.getElementById('btn-instagram-login').addEventListener('click', () => {
-    if (window.pywebview?.api?.open_instagram_login) {
-        window.pywebview.api.open_instagram_login();
-    }
-});
-
-document.getElementById('btn-print').addEventListener('click', () => {
-    window.print();
-});
-
 // Called from the Python backend once the (webcam or Astra) camera has
 // delivered its first frame, i.e. the 3D camera load triggered on the
 // loading screen has finished. Auto-advance to the main screen.
@@ -364,36 +395,6 @@ window.onCameraReady = function () {
         showScreen(2, true);
     }
 };
-
-// 인스타그램이 X-Frame-Options/CSP frame-ancestors로 <iframe> 삽입을 차단하기
-// 때문에, 릴스는 더 이상 iframe으로 로드하지 않는다. 대신 reels-overlay div가
-// 화면에서 차지하는 자리(위치/크기)를 계산해서 파이썬(main.py)에 넘기면,
-// 그 자리 위에 겹쳐지는 별도의 pywebview 네이티브 창으로 릴스를 띄운다.
-// (X-Frame-Options는 "iframe 삽입"만 막을 뿐, 최상위 문서로 직접 여는 것은
-// 막지 않기 때문에 이 방식은 차단되지 않는다.)
-
-function showReelsIframe() {
-    const overlay = document.getElementById('reels-overlay');
-    if (!overlay) return;
-
-    overlay.classList.remove('hidden');
-
-    const rect = overlay.getBoundingClientRect();
-    if (window.pywebview?.api?.open_reels_overlay) {
-        window.pywebview.api.open_reels_overlay(rect.left, rect.top, rect.width, rect.height);
-    }
-}
-
-function hideReelsIframe(muteOnly = false) {
-    const overlay = document.getElementById('reels-overlay');
-    if (!overlay) return;
-
-    overlay.classList.add('hidden');
-
-    if (window.pywebview?.api?.hide_reels_overlay) {
-        window.pywebview.api.hide_reels_overlay(muteOnly);
-    }
-}
 
 function hidePreCountdown() {
     clearTimeout(preCountdownTimeout);
@@ -417,7 +418,6 @@ function startPreCountdown() {
         // Fallback: no overlay available, just start immediately.
         sittingConfirmed = true;
         isPaused = false;
-        showReelsIframe();
         return;
     }
 
@@ -434,7 +434,6 @@ function startPreCountdown() {
             preCountdownTimeout = null;
             sittingConfirmed = true;
             isPaused = false;
-            showReelsIframe();
             return;
         }
         numberEl.textContent = String(count);
@@ -451,11 +450,16 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
 
     const statusBox = document.getElementById('status-box');
 
+    if (typeof score !== 'undefined' && isNormal !== 2) {
+        statusBox.innerText = `${statusText} (점수: ${score}점)`;
+    } else {
+        statusBox.innerText = statusText;
+    }
+
+    statusBox.className = "status-overlay";
+
     if (isNormal === 1 || isNormal === 0) {
-        // Person detected and seated: hide the status box entirely so the
-        // person isn't tempted to "perform" a correct posture, and let the
-        // 3-2-1 countdown / Instagram Reels screen take over instead.
-        statusBox.classList.add('hidden');
+        statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
 
         // Seated posture just became detected: run the 3-second pre-countdown
         // before the 30s measurement timer is allowed to run.
@@ -482,25 +486,10 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
             }
         }
     } else {
-        // isNormal === 2: no person recognized at all.
-        // isNormal === 3: a person is recognized but not seated yet.
-        statusBox.classList.remove('hidden');
-        statusBox.innerText = statusText;
-        statusBox.className = "status-overlay";
-        statusBox.classList.add(isNormal === 3 ? "status-not-seated" : "status-unknown");
-
-        const wasSittingConfirmed = sittingConfirmed;
+        statusBox.classList.add("status-unknown");
         isPaused = true;
         sittingConfirmed = false;
         hidePreCountdown();
-
-        // The person stood up / left mid-measurement: briefly hide + mute
-        // the Reels iframe (without discarding it) so the status box is
-        // visible again and nothing keeps playing in the background. It
-        // resumes right where it left off once the person is seated again.
-        if (wasSittingConfirmed) {
-            hideReelsIframe(true);
-        }
     }
 };
 

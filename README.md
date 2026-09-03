@@ -1,9 +1,8 @@
 # Pose-Report
 
 카메라 앞에서 30초간 자세를 측정해 거북목 · 등/허리 · 어깨 · 골반을 점수화하고,
-다리 꼬기는 별도의 기하학적 휴리스틱으로 감지합니다. 측정 중에는 인스타그램 릴스를
-iframe으로 보여줘 "의식적으로 바른 자세를 취하는 것"을 방지하고, 측정 결과는 Gemini
-API로 코칭 피드백을 생성한 뒤 그 자리에서 A4 한 장으로 인쇄해 확인할 수 있는
+다리 꼬기는 별도의 기하학적 휴리스틱으로 감지합니다. 측정 결과는 Gemini API로 코칭
+피드백을 생성한 뒤 QR 코드로 연결된 모바일 리포트 페이지에서 확인할 수 있는
 [pywebview](https://pywebview.flowrl.com/) 기반 데스크톱 앱입니다.
 
 > 이 프로젝트는 코드에 주석을 두지 않는 방식(바이브 코딩)으로 관리합니다.
@@ -34,98 +33,9 @@ API로 코칭 피드백을 생성한 뒤 그 자리에서 A4 한 장으로 인�
 | 1 | 카메라 로딩 |
 | 2 | 메인 화면 |
 | 3 | QR 개인정보 동의 |
-| 4 | 30초 측정 (인스타그램 릴스 오버레이) |
+| 4 | 30초 측정 |
 | 5 | 리포트 생성 |
-| 6 | 최종 리포트 (인쇄) |
-
-## 측정 대기 화면 상태 (사람 인식 vs 착석)
-
-기존에는 "필요한 33개 landmark 중 일부라도 안 보이면 전부 `인식되지 않음`" 하나의
-상태로 뭉뚱그렸습니다. 지금은 두 단계로 나뉩니다 (`main.py`의 `_analyze_pose`,
-`_analyze_pose_3d`).
-
-1. **사람이 인식되지 않음** (`is_normal = 2`): 얼굴/어깨(`UPPER_BODY_REQUIRED_LANDMARKS`,
-   코·양쪽 귀·양쪽 어깨)의 visibility가 기준(0.5) 미만이면 이 상태입니다.
-   status-box에 "사람이 인식되지 않습니다"가 표시됩니다.
-2. **자리에 착석해 주세요** (`is_normal = 3`): 얼굴/어깨는 보이지만 하반신
-   (`SEATED_REQUIRED_LANDMARKS`, 양쪽 골반·무릎·발목)의 visibility가 기준 미만이면
-   이 상태입니다. status-box에 "자리에 착석해 주세요"가 표시됩니다.
-
-두 상태 모두 정면(`_no_person_result()`) 혹은 착석(`_not_seated_result()`) 헬퍼가
-0점/threshold 소스로 채워진 동일한 반환 형식을 만들어주므로, 기존 채점 파이프라인의
-반환값 형태는 그대로 유지됩니다.
-
-사람이 인식되고(`is_normal = 0` 또는 `1`) 착석까지 확인되면 프런트(`script.js`의
-`updateFrame`)가 status-box를 `hidden` 클래스로 즉시 숨기고, 기존의 3-2-1
-프리카운트다운(`startPreCountdown`)이 끝나는 시점에 같은 창 위에 겹쳐지는 인스타그램
-릴스 오버레이 창(`#reels-overlay` 자리에 겹치는 별도 pywebview 창)을 보여주고 음소거를
-해제합니다. 측정 도중 사람이 일어서거나 화면을 벗어나면 오버레이 창을 음소거하고 잠깐
-숨기며(재생 위치는 유지) status-box를 다시 표시하고 타이머를 일시정지합니다.
-
-## 인스타그램 릴스 오버레이 & 로그인 유지
-
-30초 측정 동안 사용자가 "바른 자세를 의식적으로 유지"하는 것을 막기 위해, 착석이
-확인되고 3-2-1 카운트다운이 끝나면 인스타그램 릴스(`https://www.instagram.com/reels/`)를
-보여줍니다.
-
-> **왜 `<iframe>`이 아닌가**: 인스타그램은 `X-Frame-Options`/CSP `frame-ancestors`
-> 헤더로 자사 페이지가 다른 페이지의 `<iframe>` 안에 삽입되는 것을 막습니다. 이 헤더는
-> pywebview의 렌더링 엔진(Chromium/WebKit) 레벨에서 강제되므로 `sandbox` 속성이나 JS로는
-> 우회할 수 없고, 실제로 iframe을 쓰면 빈 화면만 뜹니다. 다만 이 제약은 "iframe으로
-> 삽입"할 때만 적용되고 페이지를 최상위 문서로 직접 열 때는 적용되지 않으므로, 릴스는
-> `index.html` 안의 `#reels-overlay` div가 화면에서 차지하는 자리 위에 정확히 겹쳐지는
-> 별도의 테두리 없는 pywebview 창(top-level window)으로 띄웁니다. `#reels-overlay`
-> div 자체는 이제 빈 자리 표시자(placeholder)로만 쓰이며, 카메라 캡처/자세 분석
-> (`updateFrame`)이 실행되는 메인 창의 문서와는 별개의 창입니다.
-
-- `showReelsIframe()` / `hideReelsIframe(muteOnly)` (`script.js`): `#reels-overlay`의
-  `getBoundingClientRect()`로 화면상 위치/크기를 계산해
-  `pywebview.api.open_reels_overlay(x, y, width, height)` /
-  `pywebview.api.hide_reels_overlay(muteOnly)`를 호출합니다(함수 이름은 하위 호환을
-  위해 유지했습니다).
-- `CameraApp.open_reels_overlay()` (`main.py`): 릴스 창이 없으면 새로 만들고, 있으면
-  `resize()`/`move()`로 위치만 갱신합니다. 메인 창이 움직이거나 리사이즈되는 경우를
-  대비해 매번 `self.window.x`/`self.window.y`를 기준으로 좌표를 다시 계산합니다.
-  **참고(HiDPI)**: 좌표는 CSS px를 OS px로 그대로 사용하므로, 디스플레이 배율이 100%가
-  아닌 환경(예: macOS Retina, Windows 배율 125%/150%)에서는 오버레이 위치가 약간
-  어긋날 수 있습니다. 필요하면 `open_reels_overlay`에서 `window.devicePixelRatio`
-  기반 보정을 추가하세요.
-- 음소거 제어는 `iframe.muted` DOM 프로퍼티 대신, 별도 창의 페이지 안에서
-  `video.muted`를 직접 조작하는 `evaluate_js()` 호출(`mute_reels_overlay`/
-  `unmute_reels_overlay`)로 처리합니다. `evaluate_js`는 브라우저 자동화 API라서
-  cross-origin 제약을 받지 않습니다.
-- **사람이 인식되지 않거나 착석이 풀리면**(`is_normal` 2 또는 3): `hideReelsIframe(true)`를
-  호출해 `hide_reels_overlay(True)`로 릴스 창을 **음소거하고 잠깐 숨기기만** 합니다
-  (창은 유지, 재생 위치도 유지). 사람이 다시 앉으면 3-2-1 카운트다운 후
-  `showReelsIframe()`이 음소거를 풀고 다시 보여줍니다.
-- **측정 화면을 완전히 벗어나는 경우**(30초 종료, screen 4 이탈): `hideReelsIframe()`을
-  인자 없이 호출해 `hide_reels_overlay(False)`로 릴스 창 자체를 닫습니다.
-- 초기 설정 화면(index 0)의 "인스타그램 로그인" 버튼은 `CameraApp.open_instagram_login()`을
-  호출해 별도의 pywebview 창으로 인스타그램 로그인 페이지를 엽니다.
-- 로그인 유지: `run_app()`에서 `webview.start(private_mode=False, storage_path=...)`로
-  실행합니다. `storage_path`는 프로젝트 폴더 아래 `.webview_data/`이며, 여기에 쿠키/세션이
-  저장되므로 로그인 창과 릴스 오버레이 창이 같은 프로필을 공유해 프로그램을 껐다 켜도
-  로그인 상태가 유지됩니다. 이 폴더는 개인 로그인 정보를 담고 있으므로 배포/버전관리 시
-  반드시 제외해야 합니다.
-
-### 알려진 제한사항
-
-- 인스타그램이 봇/자동화로 의심되는 접속을 감지하면 로그인 상태여도 로그인 화면이나
-  검증 화면을 다시 띄울 수 있습니다. 이 경우 "인스타그램 로그인" 버튼으로 다시 로그인
-  창을 열어 확인해야 합니다.
-- HiDPI 환경에서의 좌표 보정은 위에 설명한 대로 아직 자동화되어 있지 않습니다.
-
-## 리포트: QR 대신 로컬 인쇄, DB 미전송
-
-- 측정 결과(`finalReportData`, AI 피드백)는 더 이상 Supabase `main` 테이블에 PATCH되지
-  않습니다. `screen-3`(개인정보 동의)에서 만든 `uuid` row는 그대로 남지만, 여기에는
-  `result` 컬럼이 채워지지 않습니다.
-- `frontend/result/`(모바일에서 QR로 결과를 보여주던 페이지)는 더 이상 사용하지 않으므로
-  삭제했습니다.
-- 최종 리포트 화면(index 6)에는 QR 코드 대신 "리포트 출력하기" 버튼이 있고,
-  `window.print()`로 OS의 인쇄 대화상자를 엽니다. `style.css`의 `@page`/`@media print`
-  규칙이 리포트를 A4 한 장에 맞도록 폰트 크기와 여백을 줄이고, `.no-print` 요소(뒤로가기
-  버튼, 인쇄 버튼 자체)는 인쇄물에서 숨깁니다.
+| 6 | 최종 리포트 |
 
 ## 파일 구조
 
@@ -144,8 +54,7 @@ Pose-Report/
 `pose_features.py`는 모두 `main.py` 안으로 통합되었습니다. 각 스크립트가 하던 일은
 아래 [서브커맨드](#서브커맨드-구조) 섹션의 `python main.py <command>` 형태로 그대로 실행할 수 있습니다.
 
-`frontend/` 아래에는 QR 개인정보 동의 페이지(`frontend/index.html`)만 남아 있습니다.
-결과를 보여주던 `frontend/result/`는 리포트를 더 이상 QR/DB로 배포하지 않으므로 삭제했습니다.
+`frontend/` 아래 파일은 이 프로젝트의 개편 대상에서 제외합니다.
 
 ## 설치
 
