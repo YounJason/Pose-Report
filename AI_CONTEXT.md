@@ -352,24 +352,37 @@ Playwright(Chromium, headless) 인스타그램 브라우저 화면을 스트리�
   `style.css`의 `.viewfinder-wrapper { aspect-ratio }`를 함께 맞춰야 합니다.
 - 프레임은 CDP `Page.startScreencast`로 push 방식으로 받아 SSE로 `{"type": "ig_frame",
   "image": <base64 jpeg>}` 형태로 브로드캐스트합니다(기존 카메라 프레임과 같은
-  `/api/events` 채널을 공유하되 타입으로 구분). `script.js`는 `ig_frame` 수신 시
-  `#viewfinder`의 `src`를 갱신합니다. 기존 카메라 `frame` 이벤트는 점수/상태 계산에
-  쓰이는 것은 동일하지만, 아래 [화면 전환 토글](#인스타그램--카메라-화면-전환-토글)
-  기능을 위해 `#camera-view`의 `src`도 함께 갱신합니다.
+  `/api/events` 채널을 공유하되 타입으로 구분). `script.js`는 `ig_frame` 수신 시 항상
+  최신 프레임을 `latestIgFrameSrc`에 저장해두지만, 실제로 `#viewfinder`에 그려 넣는 것은
+  `screen-4`가 보이고 있고 [화면 전환 토글](#인스타그램--카메라-화면-전환-토글)이
+  인스타그램 모드일 때뿐입니다. 기존 카메라 `frame` 이벤트도 마찬가지로 점수/상태 계산에는
+  항상 쓰이지만, `#camera-view` 렌더링은 카메라 모드일 때만 수행합니다.
 
 ### 인스타그램 / 카메라 화면 전환 토글
 
 `screen-4`(`.viewfinder-wrapper`)에는 `#viewfinder`(인스타그램)와 `#camera-view`(실제
 카메라 원본, 자세 분석에 쓰이는 것과 같은 프레임) 두 개의 `<img>`가 겹쳐 있고,
 좌측 상단 `#btn-toggle-view` 버튼으로 둘 중 보여줄 화면을 전환합니다
-(`script.js`의 `setIgViewMode('instagram' | 'camera')`). 두 이미지 모두 화면에 보이는지와
-무관하게 각자의 SSE 이벤트(`ig_frame` / `frame`)가 올 때마다 항상 갱신되므로, 토글은
-단순히 어느 쪽을 보여줄지 CSS로 전환할 뿐입니다. `screen-4`에 진입할 때마다 인스타그램
-화면으로 초기화됩니다.
+(`script.js`의 `setIgViewMode('instagram' | 'camera')`). `screen-4`에 진입할 때마다
+인스타그램 화면으로 초기화됩니다.
 
 카메라 화면이 보이는 동안에는 `#ig-input-layer`가 `pointer-events: none`이 되어 인스타그램
 탭/스크롤 조작(`/api/ig_click`, `/api/ig_scroll`)이 전달되지 않습니다. 타이머·상태
 오버레이·사전 카운트다운은 기존과 동일하게 두 화면 위에 그대로 얹힙니다.
+
+**프레임 디코딩은 항상 "현재 보이는 화면"만 수행합니다.** SSE로 `ig_frame`/`frame`이 올
+때마다 최신 base64를 `latestIgFrameSrc`/`latestCameraFrameSrc`에 저장은 하지만, 실제로
+`img.src`에 그려 넣는(`createFrameRenderer`가 만드는 렌더 함수 호출) 것은 해당 이미지가
+현재 활성 모드일 때뿐입니다. 안 보이는 쪽을 계속 디코딩하면 CPU 부하가 두 배가 되어
+양쪽 다 버벅이는 원인이 되므로, 토글 전환 시 저장해둔 최신 프레임을 즉시 한 번 그려 넣는
+방식으로 전환 시 화면이 비지 않게 합니다.
+
+**프레임 렌더링에는 busy-drop 가드가 걸려 있습니다.** `img.src`를 설정하면 브라우저의
+디코딩·페인트는 비동기로 일어나는데, 이전 프레임이 아직 `load`/`error` 이벤트를 못 받은
+상태에서 새 프레임이 도착하면 무작정 `src`를 다시 덮어쓰지 않고 최신 값만 보관해뒀다가
+이전 디코딩이 끝나는 즉시 그립니다(`createFrameRenderer`). 이렇게 하지 않으면 JS 메인
+스레드가 디코딩으로 바쁜 동안 SSE 메시지가 여러 개 쌓였다가 한꺼번에 몰아서 재생되는
+"버퍼링 후 빨리감기" 현상이 생깁니다.
 
 **좌우 반전이 참가자 화면에도 적용됨**: `#camera-view`가 보이는 동안에는 설정 화면의
 `cfg-mirror` 체크박스 값을 읽어 `mirrored` 클래스(`transform: scaleX(-1)`)를 CSS로

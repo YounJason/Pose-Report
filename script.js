@@ -72,6 +72,42 @@ const backendApi = {
     }
 };
 
+function createFrameRenderer(imgEl) {
+    let busy = false;
+    let pendingSrc = null;
+
+    function paint(src) {
+        busy = true;
+        imgEl.src = src;
+    }
+
+    function onSettled() {
+        busy = false;
+        if (pendingSrc !== null) {
+            const next = pendingSrc;
+            pendingSrc = null;
+            paint(next);
+        }
+    }
+
+    imgEl.addEventListener('load', onSettled);
+    imgEl.addEventListener('error', onSettled);
+
+    return function render(src) {
+        if (busy) {
+            pendingSrc = src;
+            return;
+        }
+        paint(src);
+    };
+}
+
+const renderViewfinder = createFrameRenderer(document.getElementById('viewfinder'));
+const renderCameraView = createFrameRenderer(document.getElementById('camera-view'));
+
+let latestIgFrameSrc = null;
+let latestCameraFrameSrc = null;
+
 (function connectEventStream() {
     const evtSource = new EventSource('/api/events');
     evtSource.onmessage = (e) => {
@@ -90,7 +126,10 @@ const backendApi = {
         } else if (data.type === 'camera_ready') {
             window.onCameraReady && window.onCameraReady();
         } else if (data.type === 'ig_frame') {
-            document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + data.image;
+            latestIgFrameSrc = 'data:image/jpeg;base64,' + data.image;
+            if (currentIndex === 4 && igViewMode === 'instagram') {
+                renderViewfinder(latestIgFrameSrc);
+            }
         }
     };
     evtSource.onerror = () => {
@@ -411,8 +450,10 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
     if (currentIndex !== 4) return;
 
     if (base64Image) {
-        const cameraViewEl = document.getElementById('camera-view');
-        if (cameraViewEl) cameraViewEl.src = 'data:image/jpeg;base64,' + base64Image;
+        latestCameraFrameSrc = 'data:image/jpeg;base64,' + base64Image;
+        if (igViewMode === 'camera') {
+            renderCameraView(latestCameraFrameSrc);
+        }
     }
 
     const statusBox = document.getElementById('status-box');
@@ -523,6 +564,9 @@ function setIgViewMode(mode) {
         const cameraViewEl = document.getElementById('camera-view');
         const mirrorCheckbox = document.getElementById('cfg-mirror');
         if (cameraViewEl) cameraViewEl.classList.toggle('mirrored', !!(mirrorCheckbox && mirrorCheckbox.checked));
+        if (latestCameraFrameSrc) renderCameraView(latestCameraFrameSrc);
+    } else if (mode === 'instagram') {
+        if (latestIgFrameSrc) renderViewfinder(latestIgFrameSrc);
     }
 }
 
