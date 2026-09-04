@@ -219,13 +219,14 @@ pelvis   → PELVIS_ANGLE_THRESHOLD
 리포트의 4개 metric(`neck_score`, `torso_score`, `shoulder_score`, `pelvis_score`)은
 이 점수를 프레임별로 수집한 뒤 평균냅니다.
 
-**임계값/가중치 기본값과 index.html 동기화 주의**: 각도 threshold와 가중치 기본값은
-`config.py`에 모아두었고, `CameraApp.__init__`과 `setup_and_start()`의 기본 인자값이
-이 값을 그대로 가져다 씁니다. 이 기본값은 `index.html` 설정 화면의 input `value` 속성과
-항상 동일하게 맞춰야 합니다. 실사용 시에는 프런트가 `setup_and_start()`로 자신의 DOM 값을
-넘기므로 `config.py`의 기본값이 실제 동작에 영향을 주진 않지만, 두 값이 어긋나면 코드/문서를
-읽는 사람이 혼란을 겪을 수 있습니다. threshold나 가중치 기본값을 변경할 때는 `config.py`와
-`index.html`을 함께 확인하세요.
+**각도 threshold/가중치 기본값은 `config.py`가 유일한 소스입니다**: 각도 threshold와
+종합 점수 가중치를 `config.py`에 모아두었고, `CameraApp.__init__`과 `setup_and_start()`의
+기본 인자값이 이 값을 그대로 가져다 씁니다. `index.html`의 초기 설정 화면(`screen-1`)에는
+더 이상 각도/가중치 입력 필드가 없으며, "설정 완료" 버튼은 카메라 소스/인덱스만 body에
+실어 `POST /api/setup_and_start`를 호출합니다(`api_setup_and_start`는 `camera_idx`,
+`camera_source`, `debug_cam_idx`만 body에서 읽습니다). 각도/가중치를 바꾸려면 서버를
+재시작하기 전에 `config.py`를 수정하세요. 카메라 소스(`카메라 소스` select)와 웹캠/Astra
+장치 인덱스는 여전히 `index.html` 설정 화면에서 매 실행마다 고를 수 있습니다.
 
 ### 종합 점수 가중치
 

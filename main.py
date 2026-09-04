@@ -1357,13 +1357,13 @@ class CameraApp:
 
     def setup_and_start(
         self,
-        turtle,
-        torso,
-        shoulder,
-        pelvis,
-        head,
-        spine,
-        camera_idx,
+        turtle=config.TURTLE_NECK_ANGLE_THRESHOLD,
+        torso=config.TORSO_ANGLE_THRESHOLD,
+        shoulder=config.SHOULDER_ANGLE_THRESHOLD,
+        pelvis=config.PELVIS_ANGLE_THRESHOLD,
+        head=config.HEAD_TILT_ANGLE_THRESHOLD,
+        spine=config.SPINE_LEAN_ANGLE_THRESHOLD,
+        camera_idx=None,
         camera_source="webcam",
         debug_cam_idx=None,
         weight_neck=config.WEIGHT_NECK,
@@ -1955,7 +1955,6 @@ class CameraApp:
         self.capture_active = False
         self._capture_active_event.set()
         self._stop_astra_capture()
-        self._close_webcam_monitor()
 
         if self._astra_precreated is not None:
             try:
@@ -2126,20 +2125,9 @@ def create_flask_app(app_logic, instagram_streamer):
         body = request.get_json(force=True, silent=True) or {}
         try:
             app_logic.setup_and_start(
-                turtle=body.get("turtle"),
-                torso=body.get("torso"),
-                shoulder=body.get("shoulder"),
-                pelvis=body.get("pelvis"),
-                head=body.get("head"),
-                spine=body.get("spine"),
                 camera_idx=body.get("camera_idx"),
                 camera_source=body.get("camera_source", "webcam"),
                 debug_cam_idx=body.get("debug_cam_idx"),
-                weight_neck=body.get("weight_neck", 25.0),
-                weight_trunk=body.get("weight_trunk", 30.0),
-                weight_shoulder=body.get("weight_shoulder", 30.0),
-                weight_pelvis=body.get("weight_pelvis", 15.0),
-                weight_leg_cross=body.get("weight_leg_cross", 1.0),
             )
         except (TypeError, ValueError) as e:
             return jsonify({"ok": False, "error": f"잘못된 설정 값: {e}"}), 400
@@ -2201,12 +2189,14 @@ def run_app():
 
     def _handle_sigint(signum, frame):
         app_logic.on_closing()
+        camera_thread.join(timeout=3.0)
         instagram_streamer.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
-    threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
+    camera_thread = threading.Thread(target=app_logic.start_camera_thread, daemon=True)
+    camera_thread.start()
 
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))

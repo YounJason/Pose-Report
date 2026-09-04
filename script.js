@@ -340,22 +340,9 @@ function startCaptureLoop() {
     const cameraSource = document.getElementById('cfg-camera-source').value;
 
     backendApi.setup_and_start({
-        turtle: document.getElementById('cfg-turtle').value,
-        torso: document.getElementById('cfg-torso').value,
-        shoulder: document.getElementById('cfg-shoulder').value,
-        pelvis: document.getElementById('cfg-pelvis').value,
-        head: document.getElementById('cfg-head').value,
-        spine: document.getElementById('cfg-spine').value,
-
         camera_idx: cameraSource === 'astra' ? "" : document.getElementById('cfg-cam').value,
         camera_source: cameraSource,
-        debug_cam_idx: document.getElementById('cfg-debug-cam').value,
-
-        weight_neck: document.getElementById('cfg-weight-neck').value,
-        weight_trunk: document.getElementById('cfg-weight-trunk').value,
-        weight_shoulder: document.getElementById('cfg-weight-shoulder').value,
-        weight_pelvis: document.getElementById('cfg-weight-pelvis').value,
-        weight_leg_cross: document.getElementById('cfg-weight-leg-cross').value
+        debug_cam_idx: document.getElementById('cfg-debug-cam').value
     });
 }
 
