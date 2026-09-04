@@ -8,7 +8,6 @@ let typingInterval = null;
 let timeLeft = 30;
 let isPaused = false;
 
-let debugModeEnabled = false;
 let captureLoopStarted = false;
 
 let cameraLoadingTimeout = null;
@@ -40,6 +39,72 @@ let generatedLLMAdvice = "";
 
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
+// pywebview의 js_api 브리지를 fetch() 기반 REST 호출로 대체한다. 브라우저
+// 프런트엔드는 늘 같은 origin(Flask 서버)에서 서빙되므로 CORS 설정이 필요 없다.
+const backendApi = {
+    async toggle_camera(enabled) {
+        await fetch('/api/toggle_camera', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled })
+        }).catch(() => {});
+    },
+    async get_supabase_key() {
+        const res = await fetch('/api/supabase_key');
+        if (!res.ok) throw new Error('supabase key fetch failed');
+        const data = await res.json();
+        return data.key;
+    },
+    async generate_llm_advice(metrics) {
+        const res = await fetch('/api/generate_llm_advice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(metrics)
+        });
+        if (!res.ok) throw new Error('advice fetch failed');
+        const data = await res.json();
+        return data.advice;
+    },
+    async setup_and_start(payload) {
+        await fetch('/api/setup_and_start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).catch(() => {});
+    }
+};
+
+// 백엔드(Python)가 프레임/카메라 준비 상태를 evaluate_js로 직접 호출해주던
+// pywebview 방식 대신, SSE(Server-Sent Events)로 브로드캐스트되는 메시지를
+// 구독해 동일한 window.updateFrame / window.onCameraReady 콜백을 호출한다.
+// 페이지 로드 시점에 바로 연결하므로, 이후 화면 전환/setup_and_start 호출과
+// 관계없이 프레임을 놓치지 않는다.
+(function connectEventStream() {
+    const evtSource = new EventSource('/api/events');
+    evtSource.onmessage = (e) => {
+        let data;
+        try {
+            data = JSON.parse(e.data);
+        } catch (err) {
+            return;
+        }
+        if (data.type === 'frame') {
+            window.updateFrame(
+                data.image, data.statusText, data.isNormal, data.score,
+                data.turtleAng, data.torsoAng, data.shoulderAng, data.pelvisAng,
+                data.legCross, data.partScores
+            );
+        } else if (data.type === 'camera_ready') {
+            window.onCameraReady && window.onCameraReady();
+        } else if (data.type === 'ig_frame') {
+            document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + data.image;
+        }
+    };
+    evtSource.onerror = () => {
+        // 브라우저가 자동 재연결을 시도하므로 별도 처리는 하지 않는다.
+    };
+})();
+
 screens.forEach((screen, idx) => {
     if (idx === 0) screen.removeAttribute('style');
     screen.classList.toggle('active', idx === currentIndex);
@@ -59,7 +124,7 @@ async function showScreen(index, useFade = true) {
         clearTimeout(preCountdownTimeout);
         preCountdownTimeout = null;
         sittingConfirmed = false;
-        if (window.pywebview) window.pywebview.api.toggle_camera(false);
+        backendApi.toggle_camera(false);
     }
 
     if (currentIndex === 3) clearInterval(privacyPollInterval);
@@ -114,8 +179,8 @@ async function showScreen(index, useFade = true) {
         clearInterval(privacyPollInterval);
 
         privacyPollInterval = setInterval(() => {
-            if (window.pywebview?.api?.get_supabase_key) {
-                window.pywebview.api.get_supabase_key().then(anonKey => {
+            {
+                backendApi.get_supabase_key().then(anonKey => {
                     fetch(targetUrl, {
                         method: 'GET',
                         headers: {
@@ -138,7 +203,7 @@ async function showScreen(index, useFade = true) {
     }
 
     if (currentIndex === 4) {
-        if (window.pywebview) window.pywebview.api.toggle_camera(true);
+        backendApi.toggle_camera(true);
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
@@ -184,11 +249,7 @@ async function showScreen(index, useFade = true) {
         (async () => {
             helptext.innerText = "리포트를 생성하는 중...";
             try {
-                if (window.pywebview?.api?.generate_llm_advice) {
-                    generatedLLMAdvice = await window.pywebview.api.generate_llm_advice(finalReportData);
-                } else {
-                    generatedLLMAdvice = "백엔드 API 연결 실패로 인해 AI 피드백을 불러올 수 없습니다.";
-                }
+                generatedLLMAdvice = await backendApi.generate_llm_advice(finalReportData);
             } catch (e) {
                 generatedLLMAdvice = "AI 피드백을 생성하는 중 오류가 발생했습니다.";
             }
@@ -279,47 +340,35 @@ function syncCameraFieldsVisibility() {
 
     const camGroup = document.getElementById('cfg-cam-group');
     const debugCamGroup = document.getElementById('cfg-debug-cam-group');
-    const debugGroup = document.getElementById('cfg-debug-group');
 
     if (camGroup) camGroup.style.display = isAstra ? 'none' : '';
     if (debugCamGroup) debugCamGroup.style.display = isAstra ? '' : 'none';
-    if (debugGroup) debugGroup.style.display = isAstra ? '' : 'none';
-
-    if (!isAstra) {
-        const debugCb = document.getElementById('cfg-debug');
-        if (debugCb) debugCb.checked = false;
-    }
 }
 
 document.getElementById('cfg-camera-source').addEventListener('change', syncCameraFieldsVisibility);
-document.getElementById('cfg-debug').addEventListener('change', syncCameraFieldsVisibility);
 syncCameraFieldsVisibility();
 
 function startCaptureLoop() {
     const cameraSource = document.getElementById('cfg-camera-source').value;
-    debugModeEnabled = cameraSource === 'astra' && document.getElementById('cfg-debug').checked;
 
-    if (window.pywebview?.api) {
-        window.pywebview.api.setup_and_start(
-            document.getElementById('cfg-turtle').value,
-            document.getElementById('cfg-torso').value,
-            document.getElementById('cfg-shoulder').value,
-            document.getElementById('cfg-pelvis').value,
-            document.getElementById('cfg-head').value,
-            document.getElementById('cfg-spine').value,
+    backendApi.setup_and_start({
+        turtle: document.getElementById('cfg-turtle').value,
+        torso: document.getElementById('cfg-torso').value,
+        shoulder: document.getElementById('cfg-shoulder').value,
+        pelvis: document.getElementById('cfg-pelvis').value,
+        head: document.getElementById('cfg-head').value,
+        spine: document.getElementById('cfg-spine').value,
 
-            cameraSource === 'astra' ? "" : document.getElementById('cfg-cam').value,
-            cameraSource,
-            debugModeEnabled,
-            document.getElementById('cfg-debug-cam').value,
+        camera_idx: cameraSource === 'astra' ? "" : document.getElementById('cfg-cam').value,
+        camera_source: cameraSource,
+        debug_cam_idx: document.getElementById('cfg-debug-cam').value,
 
-            document.getElementById('cfg-weight-neck').value,
-            document.getElementById('cfg-weight-trunk').value,
-            document.getElementById('cfg-weight-shoulder').value,
-            document.getElementById('cfg-weight-pelvis').value,
-            document.getElementById('cfg-weight-leg-cross').value
-        );
-    }
+        weight_neck: document.getElementById('cfg-weight-neck').value,
+        weight_trunk: document.getElementById('cfg-weight-trunk').value,
+        weight_shoulder: document.getElementById('cfg-weight-shoulder').value,
+        weight_pelvis: document.getElementById('cfg-weight-pelvis').value,
+        weight_leg_cross: document.getElementById('cfg-weight-leg-cross').value
+    });
 }
 
 document.getElementById('btn-save').addEventListener('click', () => {
@@ -390,8 +439,6 @@ function startPreCountdown() {
 window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross, partScores) {
     if (currentIndex !== 4) return;
 
-    document.getElementById('viewfinder').src = 'data:image/jpeg;base64,' + base64Image;
-
     const statusBox = document.getElementById('status-box');
 
     if (typeof score !== 'undefined' && isNormal !== 2) {
@@ -432,12 +479,6 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
     }
 };
 
-window.updateDebugFrame = function(base64Image) {
-    if (currentIndex !== 4) return;
-    const debugImg = document.getElementById('debug-viewfinder');
-    if (debugImg) debugImg.src = 'data:image/jpeg;base64,' + base64Image;
-};
-
 window.addEventListener('keydown', (e) => {
     if (e.ctrlKey) {
         if (e.key === 'ArrowRight') {
@@ -449,11 +490,99 @@ window.addEventListener('keydown', (e) => {
         }
     }
     if (e.key === 'F11') {
+        // pywebview 창 전체화면 대신 브라우저 표준 Fullscreen API를 사용한다.
+        // 브라우저에 따라 F11이 기본 동작(네이티브 전체화면)을 가로챌 수도
+        // 있으므로, 여기서는 최선 노력(best-effort)으로만 토글한다.
         e.preventDefault();
-        if (window.pywebview) window.pywebview.api.toggle_fullscreen();
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+        } else {
+            document.documentElement.requestFullscreen().catch(() => {});
+        }
     }
-    if (e.key === 'Escape') {
-        e.preventDefault();
-        if (window.pywebview) window.pywebview.api.close_window();
-    }
+    // 브라우저 탭은 스크립트로 강제 종료할 수 없으므로 Escape 처리는 제거했다.
+    // (전체화면 상태에서는 브라우저가 Escape로 자동 종료해준다.)
 });
+
+const IG_VIEWPORT_WIDTH = 1200;
+const IG_VIEWPORT_HEIGHT = 900;
+const IG_SCROLL_SEND_INTERVAL_MS = 60;
+const IG_TAP_MOVE_THRESHOLD_PX = 8;
+const IG_TAP_MAX_DURATION_MS = 500;
+
+function mapClientToIgViewport(clientX, clientY) {
+    const img = document.getElementById('viewfinder');
+    const rect = img.getBoundingClientRect();
+    const x = (clientX - rect.left) * (IG_VIEWPORT_WIDTH / rect.width);
+    const y = (clientY - rect.top) * (IG_VIEWPORT_HEIGHT / rect.height);
+    return { x, y };
+}
+
+function sendIgClick(clientX, clientY) {
+    const { x, y } = mapClientToIgViewport(clientX, clientY);
+    fetch('/api/ig_click', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x, y })
+    }).catch(() => {});
+}
+
+function sendIgScroll(dy) {
+    fetch('/api/ig_scroll', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dy })
+    }).catch(() => {});
+}
+
+(function setupIgInputRelay() {
+    const layer = document.getElementById('ig-input-layer');
+    if (!layer) return;
+
+    let pointerDown = false;
+    let startX = 0;
+    let startY = 0;
+    let lastY = 0;
+    let startTime = 0;
+    let lastScrollSentAt = 0;
+
+    layer.addEventListener('pointerdown', (e) => {
+        if (currentIndex !== 4) return;
+        pointerDown = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        lastY = e.clientY;
+        startTime = Date.now();
+        layer.setPointerCapture(e.pointerId);
+    });
+
+    layer.addEventListener('pointermove', (e) => {
+        if (currentIndex !== 4 || !pointerDown) return;
+        const deltaY = lastY - e.clientY;
+        lastY = e.clientY;
+        const now = Date.now();
+        if (now - lastScrollSentAt >= IG_SCROLL_SEND_INTERVAL_MS && Math.abs(deltaY) > 0) {
+            sendIgScroll(deltaY * (IG_VIEWPORT_HEIGHT / layer.getBoundingClientRect().height));
+            lastScrollSentAt = now;
+        }
+    });
+
+    function endPointer(e) {
+        if (currentIndex !== 4 || !pointerDown) return;
+        pointerDown = false;
+        const movedDistance = Math.hypot(e.clientX - startX, e.clientY - startY);
+        const elapsed = Date.now() - startTime;
+        if (movedDistance <= IG_TAP_MOVE_THRESHOLD_PX && elapsed <= IG_TAP_MAX_DURATION_MS) {
+            sendIgClick(e.clientX, e.clientY);
+        }
+    }
+
+    layer.addEventListener('pointerup', endPointer);
+    layer.addEventListener('pointercancel', endPointer);
+
+    layer.addEventListener('wheel', (e) => {
+        if (currentIndex !== 4) return;
+        e.preventDefault();
+        sendIgScroll(e.deltaY);
+    }, { passive: false });
+})();

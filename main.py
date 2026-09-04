@@ -3,6 +3,8 @@ import base64
 import json
 import math
 import os
+import queue
+import signal
 import sys
 import threading
 import time
@@ -13,8 +15,9 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import requests
-import webview
 from dotenv import load_dotenv
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
+from playwright.sync_api import sync_playwright
 
 NOSE = 0
 LEFT_EYE = 2
@@ -192,6 +195,11 @@ OPENNI_REDIST_PATH = os.environ.get(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIB_DIR = os.path.join(BASE_DIR, "calibration_data")
 CALIB_FILE = os.path.join(CALIB_DIR, "stereo_calibration.json")
+
+IG_VIEWPORT_WIDTH = 1200
+IG_VIEWPORT_HEIGHT = 900
+IG_START_URL = "https://www.instagram.com/"
+IG_STORAGE_STATE_FILE = os.path.join(BASE_DIR, "instagram_state.json")
 
 
 class AstraCamera:
@@ -1141,10 +1149,113 @@ def run_debug_skeleton_viewer(
         print("[Astra] 종료")
 
 
+class InstagramStreamer:
+    def __init__(self, broadcast_fn):
+        self._broadcast = broadcast_fn
+        self._cmd_queue = queue.Queue()
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        self._cmd_queue.put(("__stop__", None))
+
+    def click(self, x, y):
+        x = max(0.0, min(float(IG_VIEWPORT_WIDTH), float(x)))
+        y = max(0.0, min(float(IG_VIEWPORT_HEIGHT), float(y)))
+        self._cmd_queue.put(("click", (x, y)))
+
+    def scroll(self, dy):
+        self._cmd_queue.put(("scroll", float(dy)))
+
+    def _run(self):
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                storage_state = (
+                    IG_STORAGE_STATE_FILE
+                    if os.path.exists(IG_STORAGE_STATE_FILE)
+                    else None
+                )
+                if storage_state is None:
+                    print(
+                        f"[Instagram] 저장된 로그인 세션이 없습니다: {IG_STORAGE_STATE_FILE}. "
+                        "login_instagram.py를 먼저 실행해 로그인 세션을 저장하세요.",
+                        flush=True,
+                    )
+                context = browser.new_context(
+                    viewport={
+                        "width": IG_VIEWPORT_WIDTH,
+                        "height": IG_VIEWPORT_HEIGHT,
+                    },
+                    storage_state=storage_state,
+                )
+                page = context.new_page()
+                page.goto(IG_START_URL, wait_until="domcontentloaded")
+
+                cdp = context.new_cdp_session(page)
+
+                def on_frame(params):
+                    try:
+                        self._broadcast({"type": "ig_frame", "image": params["data"]})
+                        cdp.send(
+                            "Page.screencastFrameAck",
+                            {"sessionId": params["sessionId"]},
+                        )
+                    except Exception as e:
+                        print(f"[Instagram] 프레임 처리 오류: {e}", flush=True)
+
+                cdp.on("Page.screencastFrame", on_frame)
+                cdp.send(
+                    "Page.startScreencast",
+                    {
+                        "format": "jpeg",
+                        "quality": 70,
+                        "maxWidth": IG_VIEWPORT_WIDTH,
+                        "maxHeight": IG_VIEWPORT_HEIGHT,
+                        "everyNthFrame": 1,
+                    },
+                )
+                print("[Instagram] 스트리밍 시작", flush=True)
+
+                while self._running:
+                    try:
+                        kind, payload = self._cmd_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    if kind == "__stop__":
+                        break
+                    try:
+                        if kind == "click":
+                            x, y = payload
+                            page.mouse.move(x, y)
+                            page.mouse.click(x, y)
+                        elif kind == "scroll":
+                            page.mouse.wheel(0, payload)
+                    except Exception as e:
+                        print(f"[Instagram] 입력 처리 오류: {e}", flush=True)
+
+                try:
+                    cdp.send("Page.stopScreencast")
+                except Exception:
+                    pass
+                context.close()
+                browser.close()
+                print("[Instagram] 종료", flush=True)
+        except Exception as e:
+            print(f"[Instagram] 스트리밍 스레드 오류: {e}", flush=True)
+
+
 class CameraApp:
     def __init__(self):
-        self.window = None
-        self.window_loaded = threading.Event()  # webview 창이 실제로 로드 완료됐는지 표시
+        # pywebview 창 대신 브라우저 프런트엔드와 SSE(Server-Sent Events)로
+        # 통신한다. 프레임/상태 갱신은 self._sse_clients에 등록된 각 클라이언트
+        # 큐로 브로드캐스트되고, 프런트는 EventSource('/api/events')로 구독한다.
+        self._sse_clients = []
+        self._sse_lock = threading.Lock()
         self.camera_enabled = False
 
         self.capture_active = False
@@ -1175,7 +1286,8 @@ class CameraApp:
 
         self.camera_source = "webcam"
 
-        self.debug_mode_enabled = False
+        self.WEBCAM_MONITOR_WINDOW = "카메라 모니터링 (운영자 전용)"
+        self._webcam_monitor_open = False
 
         self.debug_cam_idx = DEFAULT_DEBUG_RGB_DEVICE_INDEX
         self._debug_thread = None
@@ -1199,6 +1311,37 @@ class CameraApp:
     def get_supabase_key(self):
         return self.supabase_anon_key
 
+    def _register_sse_client(self):
+        q = queue.Queue(maxsize=2)
+        with self._sse_lock:
+            self._sse_clients.append(q)
+        return q
+
+    def _unregister_sse_client(self, q):
+        with self._sse_lock:
+            if q in self._sse_clients:
+                self._sse_clients.remove(q)
+
+    def _broadcast(self, payload):
+        # 카메라 프레임은 최대 초당 30회 브로드캐스트되므로, 구독자가 이를
+        # 처리하는 속도보다 빠르게 쌓이면(큐가 가득 차면) 오래된 프레임을
+        # 버리고 최신 프레임으로 교체한다 (실시간 스트림이므로 최신값만 의미있음).
+        data = json.dumps(payload, ensure_ascii=False)
+        with self._sse_lock:
+            clients = list(self._sse_clients)
+        for q in clients:
+            try:
+                q.put_nowait(data)
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    q.put_nowait(data)
+                except queue.Full:
+                    pass
+
     def setup_and_start(
         self,
         turtle,
@@ -1209,7 +1352,6 @@ class CameraApp:
         spine,
         camera_idx,
         camera_source="webcam",
-        debug_mode_enabled=False,
         debug_cam_idx=None,
         weight_neck=25.0,
         weight_trunk=30.0,
@@ -1241,9 +1383,6 @@ class CameraApp:
             if self.camera_source not in ("webcam", "astra"):
                 self.camera_source = "webcam"
 
-            self.debug_mode_enabled = (
-                bool(debug_mode_enabled) and self.camera_source == "astra"
-            )
             if debug_cam_idx not in (None, ""):
                 self.debug_cam_idx = int(debug_cam_idx)
 
@@ -1548,6 +1687,7 @@ class CameraApp:
 
         while self.running:
             if not self.capture_active:
+                self._close_webcam_monitor()
                 with self.lock:
                     if self.cap:
                         self.cap.release()
@@ -1560,6 +1700,7 @@ class CameraApp:
                 continue
 
             if self.camera_source == "astra":
+                self._close_webcam_monitor()
                 with self._debug_frame_lock:
                     pending = self._debug_latest_frame
                     self._debug_latest_frame = None
@@ -1594,9 +1735,6 @@ class CameraApp:
 
             self._notify_camera_ready()
 
-            if not self.camera_enabled:
-                continue
-
             h, w, _ = frame.shape
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = pose.process(rgb)
@@ -1630,20 +1768,25 @@ class CameraApp:
                     metric_scores,
                     metric_sources,
                 ) = _not_detected_result()
-            self._push_frame_to_webview(
-                frame,
-                status_text,
-                is_normal,
-                score,
-                turtle_ang,
-                torso_ang,
-                shoulder_ang,
-                pelvis_ang,
-                leg_cross,
-                metric_scores,
-                metric_sources,
-            )
 
+            self._show_webcam_monitor(frame)
+
+            if self.camera_enabled:
+                self._push_frame(
+                    frame,
+                    status_text,
+                    is_normal,
+                    score,
+                    turtle_ang,
+                    torso_ang,
+                    shoulder_ang,
+                    pelvis_ang,
+                    leg_cross,
+                    metric_scores,
+                    metric_sources,
+                )
+
+        self._close_webcam_monitor()
         with self.lock:
             if self.cap:
                 self.cap.release()
@@ -1678,7 +1821,7 @@ class CameraApp:
                 metric_sources,
             ) = _not_detected_result()
 
-        self._push_frame_to_webview(
+        self._push_frame(
             frame,
             status_text,
             is_normal,
@@ -1692,7 +1835,25 @@ class CameraApp:
             metric_sources,
         )
 
-    def _push_frame_to_webview(
+    def _show_webcam_monitor(self, frame):
+        try:
+            cv2.imshow(self.WEBCAM_MONITOR_WINDOW, frame)
+            cv2.waitKey(1)
+            self._webcam_monitor_open = True
+        except Exception as e:
+            print(f"[모니터링] 카메라 모니터링 창 표시 오류: {e}", flush=True)
+
+    def _close_webcam_monitor(self):
+        if not self._webcam_monitor_open:
+            return
+        try:
+            cv2.destroyWindow(self.WEBCAM_MONITOR_WINDOW)
+            cv2.waitKey(1)
+        except Exception:
+            pass
+        self._webcam_monitor_open = False
+
+    def _push_frame(
         self,
         frame,
         status_text,
@@ -1708,39 +1869,32 @@ class CameraApp:
     ):
         _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         b64_str = base64.b64encode(buffer).decode("utf-8")
-        safe_text = status_text.replace("'", "\\'")
-        leg_cross_js = "true" if leg_cross else "false"
-        scores_json = json.dumps(metric_scores, ensure_ascii=False)
-        sources_json = json.dumps(metric_sources, ensure_ascii=False)
-        if not self.window_loaded.is_set():
-            # webview 창이 아직 로드되기 전이면 evaluate_js를 시도조차 하지 않고
-            # 이번 프레임은 조용히 건너뜀 (시작 시점 race condition 방지)
-            return
-        try:
-            self.window.evaluate_js(
-                f"updateFrame('{b64_str}', '{safe_text}', {is_normal}, {score}, "
-                f"{turtle_ang:.1f}, {torso_ang:.1f}, {shoulder_ang:.1f}, {pelvis_ang:.1f}, "
-                f"{leg_cross_js}, {scores_json}, {sources_json})"
-            )
-        except Exception as e:
-            print(f"[camera] evaluate_js 실패, 이번 프레임은 건너뜀: {e}")
+        self._broadcast(
+            {
+                "type": "frame",
+                "image": b64_str,
+                "statusText": status_text,
+                "isNormal": is_normal,
+                "score": score,
+                "turtleAng": round(turtle_ang, 1),
+                "torsoAng": round(torso_ang, 1),
+                "shoulderAng": round(shoulder_ang, 1),
+                "pelvisAng": round(pelvis_ang, 1),
+                "legCross": bool(leg_cross),
+                "partScores": metric_scores,
+                "metricSources": metric_sources,
+            }
+        )
 
     def _notify_camera_ready(self):
-        # webview 창이 아직 로드 전이면 여기서 대기(최대 20초)한 뒤에도 준비가
-        # 안 됐으면 이번 시도는 건너뛰고 다음 루프에서 다시 시도한다.
-        if not self.window_loaded.wait(timeout=20):
-            print("[camera] ready 콜백 보류: webview 창이 아직 준비되지 않음")
-            return
+        # SSE 구독은 프런트엔드가 페이지를 불러올 때 바로 시작되므로(EventSource가
+        # setup_and_start 호출보다 먼저 연결됨), pywebview 때와 달리 별도로 창
+        # 로드를 기다릴 필요가 없다. 최초 프레임이 들어온 시점에 한 번만 알린다.
         with self.lock:
             if self._camera_ready_fired:
                 return
             self._camera_ready_fired = True
-        try:
-            self.window.evaluate_js("window.onCameraReady && window.onCameraReady()")
-        except Exception as e:
-            print(f"[camera] ready 콜백 전송 실패: {e}")
-            with self.lock:
-                self._camera_ready_fired = False  # 실패했으니 다음 프레임에서 재시도 허용
+        self._broadcast({"type": "camera_ready"})
 
     def _is_camera_enabled(self):
         with self.lock:
@@ -1767,6 +1921,7 @@ class CameraApp:
         self.capture_active = False
         self._capture_active_event.set()  # 종료 시 대기 중인 루프를 즉시 깨움
         self._stop_astra_capture()
+        self._close_webcam_monitor()
 
         if self._astra_precreated is not None:
             try:
@@ -1774,12 +1929,6 @@ class CameraApp:
             except Exception:
                 pass
             self._astra_precreated = None
-
-    def toggle_fullscreen(self):
-        self.window.toggle_fullscreen()
-
-    def close_window(self):
-        self.window.destroy()
 
     def toggle_camera(self, enabled):
 
@@ -1798,12 +1947,22 @@ class CameraApp:
             print(
                 "[Astra Pro] 먼저 'python main.py calibrate' 를 실행해 캘리브레이션을 완료하세요."
             )
-            try:
-                self.window.evaluate_js(
-                    "updateFrame('', 'Astra Pro 캘리브레이션 필요 (python main.py calibrate)', 2, 0, 0.0, 0.0, 0.0, 0.0, false)"
-                )
-            except Exception:
-                pass
+            self._broadcast(
+                {
+                    "type": "frame",
+                    "image": "",
+                    "statusText": "Astra Pro 캘리브레이션 필요 (python main.py calibrate)",
+                    "isNormal": 2,
+                    "score": 0,
+                    "turtleAng": 0.0,
+                    "torsoAng": 0.0,
+                    "shoulderAng": 0.0,
+                    "pelvisAng": 0.0,
+                    "legCross": False,
+                    "partScores": _ZERO_METRIC_SCORES,
+                    "metricSources": _THRESHOLD_METRIC_SOURCES,
+                }
+            )
             return
 
         self._debug_stop_event = threading.Event()
@@ -1835,9 +1994,9 @@ class CameraApp:
             kwargs={
                 "rgb_device_index": self.debug_cam_idx,
                 "frame_callback": self._on_astra_frame,
-                "show_viewer": self.debug_mode_enabled,
+                "show_viewer": True,
                 "inference_enabled": self._is_camera_enabled,
-                "debug": self.debug_mode_enabled,
+                "debug": False,
                 "precreated": precreated,
             },
             daemon=True,
@@ -1861,12 +2020,22 @@ class CameraApp:
             f"[Astra][감시] {self.ASTRA_INIT_WATCHDOG_TIMEOUT_SEC:.0f}초 안에 첫 프레임을 받지 못했습니다.",
             flush=True,
         )
-        try:
-            self.window.evaluate_js(
-                "updateFrame('', 'Astra Pro 초기화가 지연되고 있습니다', 2, 0, 0.0, 0.0, 0.0, 0.0, false)"
-            )
-        except Exception:
-            pass
+        self._broadcast(
+            {
+                "type": "frame",
+                "image": "",
+                "statusText": "Astra Pro 초기화가 지연되고 있습니다",
+                "isNormal": 2,
+                "score": 0,
+                "turtleAng": 0.0,
+                "torsoAng": 0.0,
+                "shoulderAng": 0.0,
+                "pelvisAng": 0.0,
+                "legCross": False,
+                "partScores": _ZERO_METRIC_SCORES,
+                "metricSources": _THRESHOLD_METRIC_SOURCES,
+            }
+        )
 
     def _stop_astra_capture(self):
         if self._debug_stop_event is not None:
@@ -1875,6 +2044,98 @@ class CameraApp:
             self._debug_thread.join(timeout=3.0)
         self._debug_thread = None
         self._debug_stop_event = None
+
+
+def create_flask_app(app_logic, instagram_streamer):
+    # pywebview의 js_api 브리지를 대체하는 REST/SSE 엔드포인트 모음.
+    # 프런트엔드(index.html/script.js/frontend.html/style.css)는 이 Flask
+    # 앱이 그대로 정적 파일로 서빙하므로, 별도의 프런트엔드 서버나 CORS
+    # 설정이 필요 없다 (같은 origin에서 fetch/EventSource 사용).
+    flask_app = Flask(__name__, static_folder=None)
+
+    @flask_app.get("/")
+    def index():
+        return send_from_directory(BASE_DIR, "index.html")
+
+    @flask_app.get("/<path:filename>")
+    def static_files(filename):
+        # frontend.html, script.js, style.css 등 프로젝트 폴더의 정적 파일을
+        # 그대로 서빙한다. calibration_data 등 하위 폴더 접근은 막는다.
+        safe_path = os.path.normpath(os.path.join(BASE_DIR, filename))
+        if not safe_path.startswith(BASE_DIR) or not os.path.isfile(safe_path):
+            return ("Not Found", 404)
+        return send_from_directory(BASE_DIR, filename)
+
+    @flask_app.get("/api/events")
+    def sse_events():
+        def stream():
+            q = app_logic._register_sse_client()
+            try:
+                while True:
+                    try:
+                        data = q.get(timeout=15)
+                        yield f"data: {data}\n\n"
+                    except queue.Empty:
+                        yield ": keep-alive\n\n"
+            finally:
+                app_logic._unregister_sse_client(q)
+
+        return Response(
+            stream_with_context(stream()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @flask_app.get("/api/supabase_key")
+    def api_supabase_key():
+        return jsonify({"key": app_logic.get_supabase_key()})
+
+    @flask_app.post("/api/setup_and_start")
+    def api_setup_and_start():
+        body = request.get_json(force=True, silent=True) or {}
+        app_logic.setup_and_start(
+            turtle=body.get("turtle"),
+            torso=body.get("torso"),
+            shoulder=body.get("shoulder"),
+            pelvis=body.get("pelvis"),
+            head=body.get("head"),
+            spine=body.get("spine"),
+            camera_idx=body.get("camera_idx"),
+            camera_source=body.get("camera_source", "webcam"),
+            debug_cam_idx=body.get("debug_cam_idx"),
+            weight_neck=body.get("weight_neck", 25.0),
+            weight_trunk=body.get("weight_trunk", 30.0),
+            weight_shoulder=body.get("weight_shoulder", 30.0),
+            weight_pelvis=body.get("weight_pelvis", 15.0),
+            weight_leg_cross=body.get("weight_leg_cross", 1.0),
+        )
+        return jsonify({"ok": True})
+
+    @flask_app.post("/api/toggle_camera")
+    def api_toggle_camera():
+        body = request.get_json(force=True, silent=True) or {}
+        app_logic.toggle_camera(bool(body.get("enabled")))
+        return jsonify({"ok": True})
+
+    @flask_app.post("/api/generate_llm_advice")
+    def api_generate_llm_advice():
+        body = request.get_json(force=True, silent=True) or {}
+        advice = app_logic.generate_llm_advice(body)
+        return jsonify({"advice": advice})
+
+    @flask_app.post("/api/ig_click")
+    def api_ig_click():
+        body = request.get_json(force=True, silent=True) or {}
+        instagram_streamer.click(body.get("x", 0), body.get("y", 0))
+        return jsonify({"ok": True})
+
+    @flask_app.post("/api/ig_scroll")
+    def api_ig_scroll():
+        body = request.get_json(force=True, silent=True) or {}
+        instagram_streamer.scroll(body.get("dy", 0))
+        return jsonify({"ok": True})
+
+    return flask_app
 
 
 def run_app():
@@ -1893,26 +2154,26 @@ def run_app():
             flush=True,
         )
 
-    app_logic.window = webview.create_window(
-        "Pose Report",
-        "index.html",
-        width=800,
-        height=600,
-        js_api=app_logic,
-        hidden=True,
-    )
-    app_logic.window.events.closing += app_logic.on_closing
+    instagram_streamer = InstagramStreamer(app_logic._broadcast)
+    instagram_streamer.start()
 
-    def _on_loaded():
-        app_logic.window_loaded.set()
-        try:
-            app_logic.window.show()
-        except Exception as e:
-            print(f"[window] show() 실패: {e}")
+    flask_app = create_flask_app(app_logic, instagram_streamer)
 
-    app_logic.window.events.loaded += _on_loaded
+    def _handle_sigint(signum, frame):
+        app_logic.on_closing()
+        instagram_streamer.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+
     threading.Thread(target=app_logic.start_camera_thread, daemon=True).start()
-    webview.start()
+
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8000"))
+    print(f"[server] 브라우저에서 http://{host}:{port} 접속하세요.", flush=True)
+    # use_reloader=False는 필수: Flask 리로더가 켜지면 프로세스가 두 번
+    # 시작되어 카메라 스레드/Astra 캡처가 중복 실행된다.
+    flask_app.run(host=host, port=port, threaded=True, debug=False, use_reloader=False)
 
 
 COMMANDS = {
