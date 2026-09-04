@@ -194,6 +194,7 @@ async function showScreen(index, useFade = true) {
 
     if (currentIndex === 4) {
         backendApi.toggle_camera(true);
+        setIgViewMode('instagram');
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
@@ -409,6 +410,11 @@ function startPreCountdown() {
 window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross, partScores) {
     if (currentIndex !== 4) return;
 
+    if (base64Image) {
+        const cameraViewEl = document.getElementById('camera-view');
+        if (cameraViewEl) cameraViewEl.src = 'data:image/jpeg;base64,' + base64Image;
+    }
+
     const statusBox = document.getElementById('status-box');
 
     if (typeof score !== 'undefined' && isNormal !== 2) {
@@ -501,6 +507,27 @@ window.addEventListener('keydown', (e) => {
             document.documentElement.requestFullscreen().catch(() => {});
         }
     }
+});
+
+let igViewMode = 'instagram';
+
+function setIgViewMode(mode) {
+    igViewMode = mode;
+
+    const wrapper = document.getElementById('viewfinder-wrapper');
+    const toggleBtn = document.getElementById('btn-toggle-view');
+    if (wrapper) wrapper.classList.toggle('mode-camera', mode === 'camera');
+    if (toggleBtn) toggleBtn.innerText = mode === 'camera' ? '인스타그램 화면 보기' : '카메라 화면 보기';
+
+    if (mode === 'camera') {
+        const cameraViewEl = document.getElementById('camera-view');
+        const mirrorCheckbox = document.getElementById('cfg-mirror');
+        if (cameraViewEl) cameraViewEl.classList.toggle('mirrored', !!(mirrorCheckbox && mirrorCheckbox.checked));
+    }
+}
+
+document.getElementById('btn-toggle-view').addEventListener('click', () => {
+    setIgViewMode(igViewMode === 'instagram' ? 'camera' : 'instagram');
 });
 
 const IG_VIEWPORT_WIDTH = 1200;

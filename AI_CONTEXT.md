@@ -314,9 +314,12 @@ UI 요소에는 `no-print` 클래스를 붙여 관리합니다.
   `camera_enabled`를 따릅니다. 카메라 소스 전환/캡처 중단/앱 종료 시
   `CameraApp._close_webcam_monitor()`가 `cv2.destroyWindow`로 창을 정리합니다.
 
-**좌우 반전(모니터링 전용)**: 초기 설정 화면의 "카메라 좌우 반전" 체크박스(`cfg-mirror`)는
-`CameraApp.mirror_camera`로 전달되며, 운영자용 모니터링 화면에만 영향을 줍니다. 참가자
-화면(SSE)이나 각도 계산에는 전혀 영향을 주지 않습니다.
+**좌우 반전(서버 쪽은 모니터링 전용)**: 초기 설정 화면의 "카메라 좌우 반전" 체크박스
+(`cfg-mirror`)는 `CameraApp.mirror_camera`로 전달되며, 서버(Python) 쪽에서는 운영자용
+모니터링 화면에만 영향을 줍니다. SSE로 전송되는 원본 `frame` 이미지나 각도 계산에는
+전혀 영향을 주지 않습니다. 다만 `script.js`가 같은 체크박스 값을 브라우저에서 다시 읽어,
+[참가자 화면의 카메라 토글 뷰(`#camera-view`)](#인스타그램--카메라-화면-전환-토글)에
+CSS로 별도 반전을 적용합니다 — 이는 서버 로직과 무관한 순수 프런트엔드 처리입니다.
 - **MediaPipe 웹캠**: `_show_webcam_monitor()`가 `cv2.imshow`에 넘기기 직전에만
   `cv2.flip(frame, 1)`로 복사본을 만들어 표시합니다. `_push_frame()`으로 참가자에게 보내는
   원본 `frame`은 건드리지 않습니다.
@@ -350,8 +353,29 @@ Playwright(Chromium, headless) 인스타그램 브라우저 화면을 스트리�
 - 프레임은 CDP `Page.startScreencast`로 push 방식으로 받아 SSE로 `{"type": "ig_frame",
   "image": <base64 jpeg>}` 형태로 브로드캐스트합니다(기존 카메라 프레임과 같은
   `/api/events` 채널을 공유하되 타입으로 구분). `script.js`는 `ig_frame` 수신 시
-  `#viewfinder`의 `src`를 갱신하고, 기존 카메라 `frame` 이벤트는 더 이상 `#viewfinder`를
-  갱신하지 않고 점수/상태 계산에만 쓰입니다.
+  `#viewfinder`의 `src`를 갱신합니다. 기존 카메라 `frame` 이벤트는 점수/상태 계산에
+  쓰이는 것은 동일하지만, 아래 [화면 전환 토글](#인스타그램--카메라-화면-전환-토글)
+  기능을 위해 `#camera-view`의 `src`도 함께 갱신합니다.
+
+### 인스타그램 / 카메라 화면 전환 토글
+
+`screen-4`(`.viewfinder-wrapper`)에는 `#viewfinder`(인스타그램)와 `#camera-view`(실제
+카메라 원본, 자세 분석에 쓰이는 것과 같은 프레임) 두 개의 `<img>`가 겹쳐 있고,
+좌측 상단 `#btn-toggle-view` 버튼으로 둘 중 보여줄 화면을 전환합니다
+(`script.js`의 `setIgViewMode('instagram' | 'camera')`). 두 이미지 모두 화면에 보이는지와
+무관하게 각자의 SSE 이벤트(`ig_frame` / `frame`)가 올 때마다 항상 갱신되므로, 토글은
+단순히 어느 쪽을 보여줄지 CSS로 전환할 뿐입니다. `screen-4`에 진입할 때마다 인스타그램
+화면으로 초기화됩니다.
+
+카메라 화면이 보이는 동안에는 `#ig-input-layer`가 `pointer-events: none`이 되어 인스타그램
+탭/스크롤 조작(`/api/ig_click`, `/api/ig_scroll`)이 전달되지 않습니다. 타이머·상태
+오버레이·사전 카운트다운은 기존과 동일하게 두 화면 위에 그대로 얹힙니다.
+
+**좌우 반전이 참가자 화면에도 적용됨**: `#camera-view`가 보이는 동안에는 설정 화면의
+`cfg-mirror` 체크박스 값을 읽어 `mirrored` 클래스(`transform: scaleX(-1)`)를 CSS로
+적용합니다. 이는 [아래 운영자 모니터링 섹션](#운영자-카메라-모니터링)에 설명된 기존의
+"모니터링 전용" 반전과는 별개의 순수 프런트엔드(브라우저) 처리이며, 서버가 SSE로 보내는
+원본 `frame` 이미지 자체나 각도 계산에는 영향을 주지 않습니다.
 - 참가자의 탭(클릭)/드래그(스크롤) 입력은 `#ig-input-layer`(투명 레이어, `#viewfinder` 위,
   타이머·상태 오버레이 아래)에서 Pointer Events로 잡아 `/api/ig_click`,
   `/api/ig_scroll`로 서버에 전달합니다. 서버는 이 요청을 큐에 넣고, Playwright 객체를
