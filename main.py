@@ -2069,6 +2069,25 @@ class CameraApp:
         with self.lock:
             self.camera_enabled = enabled
 
+    def stop_capture(self):
+        with self.lock:
+            self.camera_enabled = False
+            self.capture_active = False
+            self._camera_ready_fired = False
+        self._capture_active_event.set()
+
+        self._stop_astra_capture()
+
+        with self.lock:
+            if self.cap:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+
+        self._close_webcam_monitor()
+
     def _start_astra_capture(self):
 
         if self.camera_source != "astra":
@@ -2240,6 +2259,11 @@ def create_flask_app(app_logic, shorts_pool_manager):
     def api_toggle_camera():
         body = request.get_json(force=True, silent=True) or {}
         app_logic.toggle_camera(bool(body.get("enabled")))
+        return jsonify({"ok": True})
+
+    @flask_app.post("/api/stop_capture")
+    def api_stop_capture():
+        app_logic.stop_capture()
         return jsonify({"ok": True})
 
     @flask_app.post("/api/generate_llm_advice")

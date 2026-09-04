@@ -198,6 +198,9 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
 - **JS → Python**: `fetch()`로 호출하는 일반 REST 엔드포인트.
   - `POST /api/setup_and_start` — 설정 화면 값으로 측정 설정 후 캡처 시작 (`CameraApp.setup_and_start`)
   - `POST /api/toggle_camera` — `{ "enabled": bool }`로 분석 on/off (`CameraApp.toggle_camera`)
+  - `POST /api/stop_capture` — 카메라 캡처 자체를 완전히 정지(Astra `SkeletonViewer` /
+    `WEBCAM_MONITOR_WINDOW` / 카메라 장치까지 모두 정리, `CameraApp.stop_capture`).
+    운영자 단축키 Ctrl+↑(`resetToInitialSetup()`)에서 사용
   - `GET /api/supabase_key` — Supabase anon key 조회 (`CameraApp.get_supabase_key`)
   - `POST /api/generate_llm_advice` — 측정 결과로 Gemini 코칭 피드백 생성 (`CameraApp.generate_llm_advice`)
   - `GET /api/next_short` — 쇼츠 pool에서 다음 영상 ID 하나 조회 (`ShortsPoolManager.next_video_id`)
@@ -217,9 +220,27 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
 초기 설정 화면(screen 0)으로 즉시 이동합니다. `resetToInitialSetup()`은 타이머/폴링
 인터벌을 모두 정리하고 사전 카운트다운 오버레이를 닫은 뒤 `collectedMetrics` /
 `finalReportData` / `currentUuid` / `captureLoopStarted` 등 세션 상태를 초기값으로
-되돌리고 `backendApi.toggle_camera(false)`로 카메라 전송을 끕니다. 이렇게 어느 화면에서
-넘어오든 상태를 리셋한 뒤 이동해야 다음에 다시 측정을 시작할 때 이전 세션의 타이머나
-수집 중이던 지표가 섞여 들어오는 충돌을 피할 수 있습니다.
+되돌리고 `backendApi.stop_capture()`로 카메라 캡처 자체를 완전히 종료합니다. 이렇게
+어느 화면에서 넘어오든 상태를 리셋한 뒤 이동해야 다음에 다시 측정을 시작할 때 이전
+세션의 타이머나 수집 중이던 지표가 섞여 들어오는 충돌을 피할 수 있습니다.
+
+**Ctrl+↑는 카메라/모니터링 창까지 프로그램 최초 실행 시점 상태로 되돌립니다**:
+`POST /api/stop_capture`(`CameraApp.stop_capture`)는 `screen-4`를 벗어날 때 쓰는
+`toggle_camera(false)`(참가자 화면으로의 SSE 전송만 멈춤, [운영자 카메라
+모니터링](#운영자-카메라-모니터링) 참고)와 달리 캡처 자체를 정지시킵니다.
+`camera_enabled`/`capture_active`를 모두 끄고 `_capture_active_event`를 깨운 뒤,
+`_stop_astra_capture()`로 Astra 디버그 스레드에 `stop_event`를 걸어 join합니다 —
+`run_debug_skeleton_viewer`의 `finally` 블록이 실행되며 Open3D `SkeletonViewer` 창이
+안전하게 `close()`됩니다. 이어서 `self.cap`(웹캠 `cv2.VideoCapture`)을 해제하고
+`_close_webcam_monitor()`로 `WEBCAM_MONITOR_WINDOW`도 닫습니다(`capture_active`가
+꺼지면 `start_camera_thread` 루프 자체도 다음 반복에서 동일하게 정리하므로 이중
+안전장치입니다). `_astra_precreated`(사전 초기화된 Astra 카메라 핸들)는 해제하지
+않고 그대로 남겨두므로, 다음에 `screen-1`(카메라 로딩)에 다시 진입해
+`setup_and_start()`가 호출되면 `on_closing()`(앱 완전 종료)과 달리 카메라를 다시 열지
+않고 재사용해 초기화 시간을 절약합니다. 즉 Ctrl+↑ 이후의 상태는 `CameraApp.__init__`
+직후(`capture_active=False`, 카메라/뷰어/모니터링 창 모두 없음)와 동일하며, 다음
+측정은 `screen-1` 진입 시 `startCaptureLoop()` → `setup_and_start()`로 프로그램을
+맨 처음 켰을 때와 같은 경로를 그대로 다시 탑니다.
 
 ## 자세 분석 로직
 
@@ -483,12 +504,30 @@ API 로드 완료 시 자동 호출되어 플레이어를 생성하고(`controls
   없는 여백이 박스 안에 남지 않으므로, `border-radius`가 실제 이미지 가장자리에 딱
   맞게 적용됩니다).
 - **`#shorts-player`**: 유튜브 iframe에는 `object-fit`이나 내재적 크기 기반 자동 크기
-  조절이 적용되지 않으므로, 컨테이너 자체를 `aspect-ratio: 9/16; height: 100%;`인 박스로
-  만들어 실제 쇼츠 비율과 정확히 맞춘 뒤(`.viewfinder-wrapper`의 flex 중앙 정렬로 배치),
-  `overflow: hidden`과 `border-radius`를 컨테이너에 적용합니다. 컨테이너 비율이 영상과
-  정확히 일치하므로 유튜브 자체 레터박스도 나타나지 않습니다.
+  조절이 적용되지 않으므로, 부모 컨테이너(`.shorts-video-wrap`)를
+  `aspect-ratio: 9/16; height: 100%;`인 박스로 만들어 실제 쇼츠 비율과 정확히 맞춘 뒤
+  (`.viewfinder-wrapper`의 flex 중앙 정렬로 배치), `overflow: hidden`과 `border-radius`를
+  이 컨테이너에 적용합니다. 컨테이너 비율이 영상과 정확히 일치하므로 유튜브 자체
+  레터박스도 나타나지 않습니다.
 
 다른 비율의 콘텐츠를 쓰게 되면 `aspect-ratio` 값들을 함께 조정해야 합니다.
+
+### 쇼츠 휠 스크롤 탐색
+
+마우스 휠로도 이전/다음 쇼츠로 이동할 수 있습니다(`setupShortsWheelNav`, `script.js`).
+`document` 전체에 `wheel` 리스너를 걸어서 `shorts-stage` 바깥에 마우스가 있어도 동작하며,
+`currentIndex === 4`(쇼츠 측정 화면)이고 `viewMode !== 'camera'`일 때만 반응합니다.
+`deltaY`가 양수면 `goToNextShort()`, 음수면 `goToPrevShort()`를 호출하고, 연속 입력을
+막기 위해 450ms 동안 `wheelLocked`로 잠급니다.
+
+유튜브 iframe은 크로스오리진이라 마우스가 그 위에 있을 때 발생하는 `wheel` 이벤트는
+부모 문서(`document`)로 전달되지 않는 브라우저 제약이 있습니다. 이를 우회하기 위해
+`#shorts-player`(iframe) 위에 투명 오버레이 `.shorts-video-wrap > #shorts-scroll-shield`
+(`z-index: 5`)를 겹쳐 두고, 여기에도 동일한 휠 핸들러를 직접 등록합니다. 이 오버레이는
+`controls: 0`으로 유튜브 자체 컨트롤이 꺼져 있어 클릭 등 다른 상호작용을 가리지 않습니다.
+`#shorts-player`(및 유튜브 API가 이를 대체한 iframe)와 `#shorts-scroll-shield`는
+형제 관계로, 둘 다 `.shorts-video-wrap`을 기준으로 `position: absolute; inset` 형태로
+꽉 채워집니다.
 
 ### 배경: 왜 이 구조로 바뀌었는가
 

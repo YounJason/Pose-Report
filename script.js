@@ -47,6 +47,12 @@ const backendApi = {
             body: JSON.stringify({ enabled })
         }).catch(() => {});
     },
+    async stop_capture() {
+        await fetch('/api/stop_capture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }).catch(() => {});
+    },
     async get_supabase_key() {
         const res = await fetch('/api/supabase_key');
         if (!res.ok) throw new Error('supabase key fetch failed');
@@ -149,6 +155,9 @@ function onYouTubeIframeAPIReady() {
                 if (event.data === YT.PlayerState.CUED && viewMode !== 'camera') {
                     shortsPlayer.playVideo();
                 }
+                if (currentIndex !== 4) {
+                    try { shortsPlayer.pauseVideo(); } catch (e) {}
+                }
             }
         }
     });
@@ -238,12 +247,11 @@ document.getElementById('btn-prev-short').addEventListener('click', () => {
     goToPrevShort();
 });
 
-// 마우스 휠 스크롤로 이전/다음 쇼츠 이동
 (function setupShortsWheelNav() {
-    const stage = document.getElementById('shorts-stage');
-    if (!stage) return;
     let wheelLocked = false;
-    stage.addEventListener('wheel', (e) => {
+
+    function handleShortsWheel(e) {
+        if (currentIndex !== 4) return;
         if (viewMode === 'camera') return;
         if (Math.abs(e.deltaY) < 8) return;
         e.preventDefault();
@@ -255,7 +263,14 @@ document.getElementById('btn-prev-short').addEventListener('click', () => {
             goToPrevShort();
         }
         setTimeout(() => { wheelLocked = false; }, 450);
-    }, { passive: false });
+    }
+
+    document.addEventListener('wheel', handleShortsWheel, { passive: false });
+
+    const shield = document.getElementById('shorts-scroll-shield');
+    if (shield) {
+        shield.addEventListener('wheel', handleShortsWheel, { passive: false });
+    }
 })();
 
 (function connectEventStream() {
@@ -667,7 +682,7 @@ function resetToInitialSetup() {
     finalReportData = { score: 0, turtle: 0, torso: 0, shoulder: 0, pelvis: 0, legCrossSeconds: 0 };
     generatedLLMAdvice = "";
 
-    backendApi.toggle_camera(false);
+    backendApi.stop_capture();
 
     showScreen(0, false);
 }
@@ -676,10 +691,14 @@ window.addEventListener('keydown', (e) => {
     if (e.ctrlKey) {
         if (e.key === 'ArrowRight') {
             e.preventDefault();
-            showScreen(currentIndex + 1, false);
+            let nextIndex = currentIndex + 1;
+            while ([0, 1, 5].includes(nextIndex)) nextIndex++;
+            showScreen(nextIndex, false);
         } else if (e.key === 'ArrowLeft') {
             e.preventDefault();
-            showScreen(currentIndex - 1, false);
+            let previousIndex = currentIndex - 1;
+            while ([0, 1, 5].includes(previousIndex)) previousIndex--;
+            showScreen(previousIndex, false);
         } else if (e.key === 'ArrowUp') {
             e.preventDefault();
             resetToInitialSetup();
