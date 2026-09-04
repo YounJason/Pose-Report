@@ -26,6 +26,7 @@
   - [다리 꼬기](#다리-꼬기)
 - [Astra Pro 3D Depth 지원](#astra-pro-3d-depth-지원)
   - [메인 스레드 사전 초기화](#메인-스레드-사전-초기화)
+  - [카메라 초기화 안정화 (레이스 컨디션/네이티브 크래시 대응)](#카메라-초기화-안정화-레이스-컨디션네이티브-크래시-대응)
   - [Depth 파이프라인 성능](#depth-파이프라인-성능)
 - [측정 결과 처리 및 화면 동작](#측정-결과-처리-및-화면-동작)
   - [AI 피드백](#ai-피드백)
@@ -90,14 +91,15 @@
 ```text
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
-├── config.py              # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록 기본값
+├── config.py             # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록 기본값
+├── run.bat               # main.py 워치독 (Windows 전용, 예기치 않은 종료 시 자동 재시작)
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
 ├── script.js
 ├── style.css
 ├── requirements.txt
-├── README.md              # 간단한 프로젝트 소개
-└── AI_CONTEXT.md           # 이 문서
+├── README.md             # 간단한 프로젝트 소개
+└── AI_CONTEXT.md         # 이 문서
 ```
 
 서버 실행 중 `shorts_pool.json`(쇼츠 후보 pool 캐시)이 프로젝트 루트에 자동 생성됩니다.
@@ -166,6 +168,10 @@ python main.py calibrate [카메라 인덱스]   # Astra Pro 스테레오 캘리
 ```bash
 python main.py
 ```
+
+Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`으로 실행하는
+것을 권장합니다. 이유는 [카메라 초기화 안정화](#카메라-초기화-안정화-레이스-컨디션네이티브-크래시-대응)
+참고.
 
 터미널에 출력되는 주소(기본 `http://127.0.0.1:8000`)를 웹 브라우저로 열면 됩니다.
 카메라 장치 접근과 자세 분석은 서버 프로세스(Python)에서 그대로 수행하고, 프런트엔드는
@@ -282,6 +288,57 @@ python main.py calibrate
 이벤트 루프를 가져가기 전에, `run_app()`에서 미리 Astra 카메라를 열어 둡니다
 (`preinitialize_astra_camera`). 캘리브레이션 파일이 없거나 Astra Pro가 연결되어 있지
 않으면 조용히 `None`을 반환하며, 이 경우 웹캠 모드는 평소처럼 정상 동작합니다.
+
+### 카메라 초기화 안정화 (레이스 컨디션/네이티브 크래시 대응)
+
+`AstraCamera.__init__`의 초기화 시퀀스(`openni2.initialize` → `Device.open_any` →
+depth 스트림 생성/설정 → IR 스트림 생성/설정 → `cv2.VideoCapture`로 RGB 오픈)는 실제
+운영 중 **파이썬 예외나 로그 없이 프로세스 자체가 죽는** 사례가 반복적으로 보고되었고,
+재현율이 대략 50%에 달했습니다. 원인은 한 줄이 아니라 시퀀스 전체의 구조적 문제입니다.
+
+- **RGB(UVC) 오픈 시 MSMF 백엔드 크래시**: `cv2.VideoCapture(index)`처럼 백엔드를 명시하지
+  않으면 Windows에서는 기본적으로 MSMF(Media Foundation) 백엔드가 선택됩니다. MSMF는
+  WinRT/COM 기반 비동기 장치 열거 과정에서 네이티브 예외로 프로세스 전체가 죽는 사례가
+  OpenCV 공식 이슈 트래커에 다수 보고되어 있습니다.
+- **depth/IR 스트림 경합**: Astra류 구조광(structured light) 센서는 물리적으로 IR 센서
+  하나를 depth 계산용/raw IR용으로 시분할해서 씁니다(`start_depth`/`start_ir`가 서로를
+  멈추고 시작하는 상호 배타 구조인 이유). 생성자에서 depth 스트림 설정 직후 곧바로 IR
+  스트림을 만들고 설정하면, 드라이버가 이전 명령을 완전히 처리하기 전에 다음 네이티브
+  호출이 들어가면서 크래시가 발생하는 사례가 있었습니다.
+- **복합 USB 장치 타이밍**: Astra 카메라는 depth/IR과 RGB가 물리적으로 하나의 복합 USB
+  장치라서, OpenNI2가 장치를 붙잡고 있는 상태에서 곧바로 `cv2.VideoCapture`로 같은 장치에
+  접근하면 레이스 컨디션이 생기기 쉽습니다.
+
+이를 줄이기 위해 `AstraCamera` 초기화에 다음 대응을 적용했습니다.
+
+1. **MSMF 하드웨어 트랜스폼 비활성화**: `main.py` 최상단에서 `cv2`를 import하기 전에
+   `OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`을 설정합니다. MSMF의 GPU 가속 경로에서
+   발생하는 크래시/행을 줄이는 것으로 알려진 워크어라운드입니다.
+2. **RGB 캡처 백엔드 우선순위 지정**: `_open_rgb_capture()`가 `cv2.CAP_DSHOW` →
+   `cv2.CAP_MSMF` → `cv2.CAP_ANY` 순서로 오픈을 시도합니다. DirectShow가 MSMF보다
+   훨씬 오래되고 안정적인 백엔드라 우선 시도하고, 실패하면 순서대로 폴백합니다.
+3. **IR 스트림 지연 생성(lazy init)**: `__init__`에서는 depth 스트림만 만들고, IR
+   스트림은 실제로 `start_ir()`이 호출되는 시점(`_ensure_ir_stream()`)에만 생성합니다.
+   depth/IR은 어차피 동시에 쓰지 않으므로(상호 배타), 초기화 시 네이티브 호출 수 자체를
+   줄여 크래시 가능 구간을 좁힙니다.
+4. **settle delay**: openni2 초기화, 장치 열기, depth 설정, IR 생성 등 위험 구간 사이에
+   `CAMERA_INIT_SETTLE_SEC`(기본 0.35초)만큼 짧게 대기해 드라이버가 이전 명령을 처리할
+   시간을 줍니다. 초기화가 그만큼 느려지는 트레이드오프가 있으므로, 너무 느리다고 느껴지면
+   이 값을 낮춰서 조정할 수 있습니다.
+5. **생성 재시도**: `create_astra_camera_with_retry()`가 `AstraCamera(...)` 생성을
+   감싸서, 파이썬 레벨에서 잡히는 예외(예: `OniError`)가 나면 정리 후 최대
+   `CAMERA_INIT_MAX_ATTEMPTS`회(기본 3회, `CAMERA_INIT_RETRY_BACKOFF_SEC`=1.5초 간격)
+   재시도합니다. `run_calibration`, `preinitialize_astra_camera`,
+   `run_debug_skeleton_viewer` 세 호출부 모두 `AstraCamera(...)`를 직접 부르지 않고
+   이 헬퍼를 거칩니다.
+
+**중요한 한계**: 위 5가지는 전부 파이썬 레벨에서 잡히는 실패에만 대응합니다. 순수한
+네이티브 하드 크래시(access violation 등으로 프로세스 자체가 죽는 경우)는 같은 프로세스
+안에서는 원리적으로 복구할 수 없습니다. 그래서 프로세스가 죽으면 즉시 재시작하는
+`run.bat`(Windows 배치 워치독)을 함께 제공합니다. `python main.py`를 직접
+실행하는 대신 이 배치파일로 실행하면, 초기화 중 정상 종료가 아닌 종료(exit code != 0)를
+감지해 2초 후 자동으로 다시 띄웁니다. Ctrl+C로 정상 종료하면 재시작 없이 그대로 창이
+닫힙니다.
 
 ### Depth 파이프라인 성능
 
