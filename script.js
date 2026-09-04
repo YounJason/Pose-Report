@@ -342,7 +342,8 @@ function startCaptureLoop() {
     backendApi.setup_and_start({
         camera_idx: cameraSource === 'astra' ? "" : document.getElementById('cfg-cam').value,
         camera_source: cameraSource,
-        debug_cam_idx: document.getElementById('cfg-debug-cam').value
+        debug_cam_idx: document.getElementById('cfg-debug-cam').value,
+        mirror_camera: document.getElementById('cfg-mirror').checked
     });
 }
 

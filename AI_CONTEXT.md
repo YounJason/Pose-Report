@@ -314,6 +314,16 @@ UI 요소에는 `no-print` 클래스를 붙여 관리합니다.
   `camera_enabled`를 따릅니다. 카메라 소스 전환/캡처 중단/앱 종료 시
   `CameraApp._close_webcam_monitor()`가 `cv2.destroyWindow`로 창을 정리합니다.
 
+**좌우 반전(모니터링 전용)**: 초기 설정 화면의 "카메라 좌우 반전" 체크박스(`cfg-mirror`)는
+`CameraApp.mirror_camera`로 전달되며, 운영자용 모니터링 화면에만 영향을 줍니다. 참가자
+화면(SSE)이나 각도 계산에는 전혀 영향을 주지 않습니다.
+- **MediaPipe 웹캠**: `_show_webcam_monitor()`가 `cv2.imshow`에 넘기기 직전에만
+  `cv2.flip(frame, 1)`로 복사본을 만들어 표시합니다. `_push_frame()`으로 참가자에게 보내는
+  원본 `frame`은 건드리지 않습니다.
+- **Astra Pro**: `SkeletonViewer.update()`가 렌더링용으로 복사한 `pts` 배열에만
+  `pts[:, 0] *= -1`을 적용합니다. 각도 계산에 쓰이는 원본 `points3d`와 참가자 화면으로
+  전송되는 `disp` 프레임은 그대로 유지됩니다.
+
 ## 인스타그램 스트리밍 Playwright 연동
 
 기존에 참가자 화면(`#viewfinder`)에 표시하던 카메라 프리뷰 대신, 서버가 백그라운드로 띄운

@@ -587,6 +587,7 @@ class SkeletonViewer:
         window_name="Pose Report - Debug 3D Skeleton Viewer",
         width=960,
         height=720,
+        mirror=False,
     ):
 
         import open3d as o3d
@@ -594,6 +595,7 @@ class SkeletonViewer:
         self._o3d = o3d
 
         self.connections = list(connections)
+        self.mirror = mirror
 
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window(window_name, width=width, height=height)
@@ -619,6 +621,8 @@ class SkeletonViewer:
 
         pts[:, 1] *= -1
         pts[:, 2] *= -1
+        if self.mirror:
+            pts[:, 0] *= -1
 
         valid_idx = np.where(valid_mask)[0]
         if len(valid_idx) > 0:
@@ -941,6 +945,7 @@ def run_debug_skeleton_viewer(
     debug=False,
     inference_enabled=None,
     precreated=None,
+    mirror_view=False,
 ):
 
     if precreated is not None:
@@ -1009,7 +1014,7 @@ def run_debug_skeleton_viewer(
                     "[디버그 모드][진단] 3/4 SkeletonViewer(Open3D 창) 생성 시작",
                     flush=True,
                 )
-            viewer = SkeletonViewer(connections)
+            viewer = SkeletonViewer(connections, mirror=mirror_view)
             if debug:
                 print("[디버그 모드][진단] 3/4 SkeletonViewer 생성 완료", flush=True)
         else:
@@ -1301,6 +1306,7 @@ class CameraApp:
         self.WEIGHT_LEG_CROSS = config.WEIGHT_LEG_CROSS
 
         self.camera_source = "webcam"
+        self.mirror_camera = False
 
         self.WEBCAM_MONITOR_WINDOW = "카메라 모니터링 (운영자 전용)"
         self._webcam_monitor_open = False
@@ -1366,6 +1372,7 @@ class CameraApp:
         camera_idx=None,
         camera_source="webcam",
         debug_cam_idx=None,
+        mirror_camera=False,
         weight_neck=config.WEIGHT_NECK,
         weight_trunk=config.WEIGHT_TRUNK,
         weight_shoulder=config.WEIGHT_SHOULDER,
@@ -1395,6 +1402,8 @@ class CameraApp:
             self.camera_source = (camera_source or "webcam").strip().lower()
             if self.camera_source not in ("webcam", "astra"):
                 self.camera_source = "webcam"
+
+            self.mirror_camera = bool(mirror_camera)
 
             if debug_cam_idx not in (None, ""):
                 self.debug_cam_idx = int(debug_cam_idx)
@@ -1874,7 +1883,8 @@ class CameraApp:
 
     def _show_webcam_monitor(self, frame):
         try:
-            cv2.imshow(self.WEBCAM_MONITOR_WINDOW, frame)
+            display = cv2.flip(frame, 1) if self.mirror_camera else frame
+            cv2.imshow(self.WEBCAM_MONITOR_WINDOW, display)
             cv2.waitKey(1)
             self._webcam_monitor_open = True
         except Exception as e:
@@ -2031,6 +2041,7 @@ class CameraApp:
                 "inference_enabled": self._is_camera_enabled,
                 "debug": False,
                 "precreated": precreated,
+                "mirror_view": self.mirror_camera,
             },
             daemon=True,
         )
@@ -2128,6 +2139,7 @@ def create_flask_app(app_logic, instagram_streamer):
                 camera_idx=body.get("camera_idx"),
                 camera_source=body.get("camera_source", "webcam"),
                 debug_cam_idx=body.get("debug_cam_idx"),
+                mirror_camera=body.get("mirror_camera", False),
             )
         except (TypeError, ValueError) as e:
             return jsonify({"ok": False, "error": f"잘못된 설정 값: {e}"}), 400
