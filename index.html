@@ -55,9 +55,18 @@
         <div class="screen" id="screen-4">
             <div class="camera-layout">
                 <div class="viewfinder-wrapper" id="viewfinder-wrapper">
-                    <div id="shorts-player"></div>
+                    <div class="shorts-stage" id="shorts-stage">
+                        <div id="shorts-player"></div>
+                        <div class="shorts-nav">
+                            <button type="button" class="shorts-nav-btn" id="btn-prev-short" aria-label="이전 쇼츠" disabled>
+                                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 5.5l-8 8h5v5h6v-5h5z"/></svg>
+                            </button>
+                            <button type="button" class="shorts-nav-btn" id="btn-next-short" aria-label="다음 쇼츠">
+                                <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 18.5l8-8h-5v-5h-6v5h-5z"/></svg>
+                            </button>
+                        </div>
+                    </div>
                     <img id="camera-view" alt="Camera Feed">
-                    <button type="button" class="next-short-btn" id="btn-next-short">다음 영상</button>
                     <button type="button" class="view-toggle-btn" id="btn-toggle-view">카메라 화면 보기</button>
                     <div class="timer-badge" id="timer">60</div>
                     <div class="status-overlay status-unknown" id="status-box">인식되지 않음</div>

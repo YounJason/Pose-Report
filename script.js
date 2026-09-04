@@ -110,6 +110,11 @@ let shortsPlayer = null;
 let shortsPlayerReady = false;
 let pendingShortVideoId = null;
 
+// 쇼츠 탐색 히스토리 (이전/다음 이동을 위한 인덱스 관리)
+let shortsHistory = [];
+let shortsHistoryIndex = -1;
+let shortsFetchInFlight = false;
+
 function onYouTubeIframeAPIReady() {
     shortsPlayer = new YT.Player('shorts-player', {
         width: '100%',
@@ -118,14 +123,31 @@ function onYouTubeIframeAPIReady() {
             playsinline: 1,
             controls: 0,
             modestbranding: 1,
-            rel: 0
+            rel: 0,
+            cc_load_policy: 0,   // 자막 기본 off
+            iv_load_policy: 3,
+            disablekb: 1
         },
         events: {
             onReady: () => {
                 shortsPlayerReady = true;
+                try { shortsPlayer.unloadModule('captions'); } catch (e) {}
                 if (pendingShortVideoId) {
                     shortsPlayer.loadVideoById(pendingShortVideoId);
                     pendingShortVideoId = null;
+                }
+            },
+            onStateChange: (event) => {
+                if (event.data === YT.PlayerState.PLAYING) {
+                    try { shortsPlayer.unloadModule('captions'); } catch (e) {}
+                }
+                if (event.data === YT.PlayerState.ENDED) {
+                    // 무한 반복 재생
+                    shortsPlayer.seekTo(0, true);
+                    shortsPlayer.playVideo();
+                }
+                if (event.data === YT.PlayerState.CUED && viewMode !== 'camera') {
+                    shortsPlayer.playVideo();
                 }
             }
         }
@@ -133,28 +155,108 @@ function onYouTubeIframeAPIReady() {
 }
 window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
 
-async function loadNextShort() {
-    let videoId = null;
+async function fetchNextShortVideoId() {
     try {
         const res = await fetch('/api/next_short');
         const data = await res.json();
-        videoId = data.videoId;
+        return data.videoId || null;
     } catch (err) {
-        return;
-    }
-    if (!videoId) return;
-
-    if (shortsPlayerReady && shortsPlayer) {
-        shortsPlayer.loadVideoById(videoId);
-        shortsPlayer.unMute();
-    } else {
-        pendingShortVideoId = videoId;
+        return null;
     }
 }
 
+function updateShortsNavButtons() {
+    const prevBtn = document.getElementById('btn-prev-short');
+    if (prevBtn) prevBtn.disabled = shortsHistoryIndex <= 0;
+}
+
+function resetShortsHistory() {
+    shortsHistory = [];
+    shortsHistoryIndex = -1;
+    updateShortsNavButtons();
+}
+
+function animateShortsTransition(direction) {
+    const playerEl = document.getElementById('shorts-player');
+    if (!playerEl) return;
+    playerEl.classList.remove('shorts-anim-next', 'shorts-anim-prev');
+    void playerEl.offsetWidth; // 리플로우를 강제하여 애니메이션 재시작
+    playerEl.classList.add(direction === 'prev' ? 'shorts-anim-prev' : 'shorts-anim-next');
+}
+
+(function setupShortsAnimReset() {
+    const playerEl = document.getElementById('shorts-player');
+    if (!playerEl) return;
+    playerEl.addEventListener('animationend', (e) => {
+        e.currentTarget.classList.remove('shorts-anim-next', 'shorts-anim-prev');
+    });
+})();
+
+function playShortVideo(videoId, direction) {
+    if (!videoId) return;
+    if (shortsPlayerReady && shortsPlayer) {
+        shortsPlayer.loadVideoById(videoId);
+        if (viewMode !== 'camera') shortsPlayer.unMute();
+    } else {
+        pendingShortVideoId = videoId;
+    }
+    animateShortsTransition(direction);
+}
+
+function goToShortAt(index, direction) {
+    const videoId = shortsHistory[index];
+    if (!videoId) return;
+    shortsHistoryIndex = index;
+    updateShortsNavButtons();
+    playShortVideo(videoId, direction);
+}
+
+async function goToNextShort() {
+    if (shortsHistoryIndex < shortsHistory.length - 1) {
+        goToShortAt(shortsHistoryIndex + 1, 'next');
+        return;
+    }
+    if (shortsFetchInFlight) return;
+    shortsFetchInFlight = true;
+    const videoId = await fetchNextShortVideoId();
+    shortsFetchInFlight = false;
+    if (!videoId) return;
+    shortsHistory.push(videoId);
+    goToShortAt(shortsHistory.length - 1, 'next');
+}
+
+function goToPrevShort() {
+    if (shortsHistoryIndex <= 0) return;
+    goToShortAt(shortsHistoryIndex - 1, 'prev');
+}
+
 document.getElementById('btn-next-short').addEventListener('click', () => {
-    loadNextShort();
+    goToNextShort();
 });
+
+document.getElementById('btn-prev-short').addEventListener('click', () => {
+    goToPrevShort();
+});
+
+// 마우스 휠 스크롤로 이전/다음 쇼츠 이동
+(function setupShortsWheelNav() {
+    const stage = document.getElementById('shorts-stage');
+    if (!stage) return;
+    let wheelLocked = false;
+    stage.addEventListener('wheel', (e) => {
+        if (viewMode === 'camera') return;
+        if (Math.abs(e.deltaY) < 8) return;
+        e.preventDefault();
+        if (wheelLocked) return;
+        wheelLocked = true;
+        if (e.deltaY > 0) {
+            goToNextShort();
+        } else {
+            goToPrevShort();
+        }
+        setTimeout(() => { wheelLocked = false; }, 450);
+    }, { passive: false });
+})();
 
 (function connectEventStream() {
     const evtSource = new EventSource('/api/events');
@@ -278,7 +380,8 @@ async function showScreen(index, useFade = true) {
     if (currentIndex === 4) {
         backendApi.toggle_camera(true);
         setViewMode('shorts');
-        loadNextShort();
+        resetShortsHistory();
+        goToNextShort();
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
@@ -610,6 +713,13 @@ function setViewMode(mode) {
         const mirrorCheckbox = document.getElementById('cfg-mirror');
         if (cameraViewEl) cameraViewEl.classList.toggle('mirrored', !!(mirrorCheckbox && mirrorCheckbox.checked));
         if (latestCameraFrameSrc) renderCameraView(latestCameraFrameSrc);
+        // 카메라 화면일 때는 쇼츠 일시정지
+        if (shortsPlayerReady && shortsPlayer) {
+            try { shortsPlayer.pauseVideo(); } catch (e) {}
+        }
+    } else if (shortsPlayerReady && shortsPlayer) {
+        // 쇼츠 화면으로 복귀 시 재생 재개
+        try { shortsPlayer.playVideo(); } catch (e) {}
     }
 }
 
