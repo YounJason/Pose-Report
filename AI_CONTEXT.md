@@ -375,14 +375,20 @@ UI 요소에는 `no-print` 클래스를 붙여 관리합니다.
 디버그 모드 옵션(체크박스)은 제거되었고, 카메라가 동작하는 동안(설정 이후 ~ 측정 종료까지)
 운영자 PC에는 항상 모니터링 창이 뜹니다.
 
-- **Astra Pro**: 기존 Open3D `SkeletonViewer` 3D 스켈레톤 창이 항상 실행됩니다
-  (`run_debug_skeleton_viewer(show_viewer=True)` 고정).
+- **Astra Pro**: 기존 Open3D `SkeletonViewer` 3D 스켈레톤 창이 항상 실행되는 것에 더해
+  (`run_debug_skeleton_viewer(show_viewer=True)` 고정), `CameraApp.start_camera_thread`가
+  Astra 프레임 콜백(`_on_astra_frame`)에서 받은 RGB `frame`을 그대로
+  `_show_webcam_monitor(frame)`에 넘겨 동일한 `CameraApp.WEBCAM_MONITOR_WINDOW`
+  cv2 창도 함께 띄웁니다. 즉 Astra Pro 모드에서는 Open3D 3D 스켈레톤 창과
+  `WEBCAM_MONITOR_WINDOW` 2D 창이 동시에 표시됩니다.
 - **MediaPipe 웹캠**: `CameraApp.start_camera_thread`가 매 프레임마다 랜드마크를 그려
-  `cv2.imshow(CameraApp.WEBCAM_MONITOR_WINDOW, frame)`으로 로컬 창을 띄웁니다. 이 창은
-  참가자 화면(SSE)과 무관하게 항상 갱신되며, `camera_enabled`가 꺼져 있어도(측정 일시정지
-  상태 등) 계속 표시됩니다. 참가자 화면으로의 SSE 프레임 전송(`_push_frame`)만
-  `camera_enabled`를 따릅니다. 카메라 소스 전환/캡처 중단/앱 종료 시
-  `CameraApp._close_webcam_monitor()`가 `cv2.destroyWindow`로 창을 정리합니다.
+  `cv2.imshow(CameraApp.WEBCAM_MONITOR_WINDOW, frame)`으로 로컬 창을 띄웁니다.
+- **공통(Astra Pro / MediaPipe 웹캠)**: `WEBCAM_MONITOR_WINDOW`는 참가자 화면(SSE)과
+  무관하게 프레임이 들어올 때마다 항상 갱신되며, `camera_enabled`가 꺼져 있어도(측정
+  일시정지 상태 등) 계속 표시됩니다. 참가자 화면으로의 SSE 프레임 전송(`_push_frame`,
+  Astra의 경우 `_process_and_push_astra_frame`)만 `camera_enabled`를 따릅니다.
+  카메라 소스 전환/캡처 중단/앱 종료 시 `CameraApp._close_webcam_monitor()`가
+  `cv2.destroyWindow`로 창을 정리합니다.
 
 **좌우 반전(서버 쪽은 모니터링 전용)**: 초기 설정 화면의 "카메라 좌우 반전" 체크박스
 (`cfg-mirror`)는 `CameraApp.mirror_camera`로 전달되며, 서버(Python) 쪽에서는 운영자용

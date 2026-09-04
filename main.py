@@ -1812,7 +1812,6 @@ class CameraApp:
                     continue
 
                 if self.camera_source == "astra":
-                    self._close_webcam_monitor()
                     with self._debug_frame_lock:
                         pending = self._debug_latest_frame
                         self._debug_latest_frame = None
@@ -1820,8 +1819,9 @@ class CameraApp:
                         self._astra_frame_event.wait(timeout=0.5)
                         self._astra_frame_event.clear()
                         continue
+                    frame, landmarks, w, h, points3d, valid = pending
+                    self._show_webcam_monitor(frame)
                     if self.camera_enabled:
-                        frame, landmarks, w, h, points3d, valid = pending
                         self._process_and_push_astra_frame(
                             frame, landmarks, w, h, points3d, valid
                         )
