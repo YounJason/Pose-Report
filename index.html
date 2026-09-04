@@ -4,13 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pose Report</title>
+    <title>포커스 핏 AI</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 
 <body>
@@ -35,13 +34,12 @@
             <div class="loading-card">
                 <div class="loading-spinner"></div>
                 <h2>카메라를 불러오는 중입니다</h2>
-                <p class="help-text">카메라 장치를 초기화하고 있습니다. 잠시만 기다려주세요.</p>
             </div>
         </div>
 
         <div class="screen" id="screen-2">
             <div class="animated-bg"></div>
-            <h1>실시간 AI 자세 분석 시스템</h1>
+            <h1>포커스 핏 AI</h1>
             <button class="btn" id="btn-start">시작하기</button>
         </div>
 
@@ -69,7 +67,7 @@
                     <img id="camera-view" alt="Camera Feed">
                     <button type="button" class="view-toggle-btn" id="btn-toggle-view">카메라 화면 보기</button>
                     <div class="timer-badge" id="timer">60</div>
-                    <div class="status-overlay status-unknown" id="status-box">인식되지 않음</div>
+                    <div class="status-overlay status-unknown" id="status-box" style="display: none;">인식되지 않음</div>
                     <div class="precountdown-overlay" id="precountdown-overlay">
                         <span id="precountdown-number">3</span>
                     </div>
@@ -81,7 +79,6 @@
             <div class="loading-card">
                 <div class="loading-spinner"></div>
                 <h2>리포트를 생성하는 중입니다</h2>
-                <p class="help-text" id="report-loading-helptext"></p>
             </div>
         </div>
 
@@ -183,6 +180,7 @@
     </div>
 
     <script src="script.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
 
 </body>
 

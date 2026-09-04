@@ -420,10 +420,7 @@ async function showScreen(index, useFade = true) {
     }
 
     if (currentIndex === 5) {
-        const helptext = document.getElementById('report-loading-helptext');
-
         (async () => {
-            helptext.innerText = "리포트를 생성하는 중...";
             try {
                 generatedLLMAdvice = await backendApi.generate_llm_advice(finalReportData);
             } catch (e) {
