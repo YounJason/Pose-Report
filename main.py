@@ -13,6 +13,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -185,6 +187,11 @@ OPENNI_REDIST_PATH = os.environ.get(
     "OPENNI2_REDIST", r"C:\Program Files\OpenNI2\Redist"
 )
 
+CAMERA_INIT_SETTLE_SEC = 0.35
+CAMERA_INIT_MAX_ATTEMPTS = 3
+CAMERA_INIT_RETRY_BACKOFF_SEC = 1.5
+RGB_CAPTURE_BACKENDS = (cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIB_DIR = os.path.join(BASE_DIR, "calibration_data")
 CALIB_FILE = os.path.join(CALIB_DIR, "stereo_calibration.json")
@@ -207,8 +214,13 @@ class AstraCamera:
         rgb_resolution=RGB_RESOLUTION,
         fps=FPS,
         debug=False,
+        settle_sec=CAMERA_INIT_SETTLE_SEC,
     ):
         self._debug = debug
+        self._settle_sec = settle_sec
+        self._rgb_device_index = rgb_device_index
+        self._rgb_resolution = rgb_resolution
+        self._fps = fps
 
         from openni import openni2
         from openni import _openni2 as c_api
@@ -225,27 +237,23 @@ class AstraCamera:
         self._depth_mirror_supported = True
         self._ir_mirror_supported = True
 
+        def _log(msg):
+            if self._debug:
+                print(msg, flush=True)
+
+        def _settle():
+            if self._settle_sec > 0:
+                time.sleep(self._settle_sec)
+
         try:
-            if self._debug:
-                print("[Astra][진단]   openni2.initialize 시작", flush=True)
             openni2.initialize(openni_redist)
-            if self._debug:
-                print("[Astra][진단]   openni2.initialize 완료", flush=True)
+            _settle()
 
-            if self._debug:
-                print("[Astra][진단]   Device.open_any() 시작", flush=True)
             self.dev = openni2.Device.open_any()
-            if self._debug:
-                print("[Astra][진단]   Device.open_any() 완료", flush=True)
+            _settle()
 
-            if self._debug:
-                print("[Astra][진단]   create_depth_stream() 시작", flush=True)
             self.depth_stream = self.dev.create_depth_stream()
-            if self._debug:
-                print("[Astra][진단]   create_depth_stream() 완료", flush=True)
 
-            if self._debug:
-                print("[Astra][진단]   depth_stream.set_video_mode() 시작", flush=True)
             self.depth_stream.set_video_mode(
                 c_api.OniVideoMode(
                     pixelFormat=c_api.OniPixelFormat.ONI_PIXEL_FORMAT_DEPTH_1_MM,
@@ -254,8 +262,6 @@ class AstraCamera:
                     fps=fps,
                 )
             )
-            if self._debug:
-                print("[Astra][진단]   depth_stream.set_video_mode() 완료", flush=True)
             try:
                 self.depth_stream.set_mirroring_enabled(False)
             except Exception as e:
@@ -265,52 +271,11 @@ class AstraCamera:
                     e,
                 )
 
-            if self._debug:
-                print("[Astra][진단]   create_ir_stream() 시작", flush=True)
-            try:
-                self.ir_stream = self.dev.create_ir_stream()
-                if self._debug:
-                    print("[Astra][진단]   create_ir_stream() 완료", flush=True)
-                self.ir_stream.set_video_mode(
-                    c_api.OniVideoMode(
-                        pixelFormat=c_api.OniPixelFormat.ONI_PIXEL_FORMAT_GRAY16,
-                        resolutionX=640,
-                        resolutionY=480,
-                        fps=fps,
-                    )
-                )
-                try:
-                    self.ir_stream.set_mirroring_enabled(False)
-                except Exception as e:
-                    self._ir_mirror_supported = False
-                    print(
-                        "[Astra][경고] IR 스트림 미러링 설정 API 미지원. 소프트웨어 flip으로 대체:",
-                        e,
-                    )
-            except Exception as e:
-                print("[Astra][경고] IR 스트림을 생성할 수 없습니다:", e)
+            _settle()
 
-            if self._debug:
-                print(
-                    f"[Astra][진단]   RGB cv2.VideoCapture({rgb_device_index}) 시작",
-                    flush=True,
-                )
-            self.cap = cv2.VideoCapture(rgb_device_index)
-            if self._debug:
-                print(
-                    "[Astra][진단]   RGB cv2.VideoCapture() 생성자 반환됨", flush=True
-                )
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, rgb_resolution[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rgb_resolution[1])
-            self.cap.set(cv2.CAP_PROP_FPS, fps)
-            if self._debug:
-                print(
-                    f"[Astra][진단]   RGB cap.isOpened()={self.cap.isOpened()}",
-                    flush=True,
-                )
+            self.cap = self._open_rgb_capture(rgb_device_index, rgb_resolution, fps)
 
-            if not self.cap.isOpened():
+            if self.cap is None or not self.cap.isOpened():
                 print(
                     "[Astra][경고] RGB(UVC) 카메라를 열지 못했습니다. 디버그 카메라 인덱스를 확인하세요."
                 )
@@ -321,6 +286,62 @@ class AstraCamera:
             )
             self.release()
             raise
+
+    def _open_rgb_capture(self, rgb_device_index, rgb_resolution, fps):
+        last_error = None
+        for backend in RGB_CAPTURE_BACKENDS:
+            try:
+                cap = cv2.VideoCapture(rgb_device_index, backend)
+            except Exception as e:
+                last_error = e
+                continue
+
+            if cap is not None and cap.isOpened():
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, rgb_resolution[0])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rgb_resolution[1])
+                cap.set(cv2.CAP_PROP_FPS, fps)
+                return cap
+
+            if cap is not None:
+                cap.release()
+
+        if last_error is not None and self._debug:
+            print(f"[Astra][경고] RGB 캡처 오픈 중 예외: {last_error}", flush=True)
+        return None
+
+    def _ensure_ir_stream(self):
+        if self.ir_stream is not None:
+            return
+
+        def _log(msg):
+            if self._debug:
+                print(msg, flush=True)
+
+        try:
+            ir_stream = self.dev.create_ir_stream()
+            if self._settle_sec > 0:
+                time.sleep(self._settle_sec)
+            ir_stream.set_video_mode(
+                self._c_api.OniVideoMode(
+                    pixelFormat=self._c_api.OniPixelFormat.ONI_PIXEL_FORMAT_GRAY16,
+                    resolutionX=640,
+                    resolutionY=480,
+                    fps=self._fps,
+                )
+            )
+            try:
+                ir_stream.set_mirroring_enabled(False)
+            except Exception as e:
+                self._ir_mirror_supported = False
+                print(
+                    "[Astra][경고] IR 스트림 미러링 설정 API 미지원. 소프트웨어 flip으로 대체:",
+                    e,
+                )
+            self.ir_stream = ir_stream
+        except Exception as e:
+            print("[Astra][경고] IR 스트림을 생성할 수 없습니다:", e)
+            self.ir_stream = None
 
     def start_depth(self):
         if self._ir_started:
@@ -335,6 +356,8 @@ class AstraCamera:
             self._depth_started = False
 
     def start_ir(self):
+        if self.ir_stream is None:
+            self._ensure_ir_stream()
         if self.ir_stream is None:
             return
         if self._depth_started:
@@ -426,6 +449,33 @@ class AstraCamera:
         self.depth_stream = None
         self.ir_stream = None
         self.dev = None
+
+
+def create_astra_camera_with_retry(
+    rgb_device_index=DEFAULT_DEBUG_RGB_DEVICE_INDEX,
+    debug=False,
+    max_attempts=CAMERA_INIT_MAX_ATTEMPTS,
+    retry_backoff_sec=CAMERA_INIT_RETRY_BACKOFF_SEC,
+):
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            cam = AstraCamera(rgb_device_index=rgb_device_index, debug=debug)
+            return cam
+        except Exception as e:
+            last_error = e
+            print(
+                f"[Astra][경고] AstraCamera 생성 실패 (시도 {attempt}/{max_attempts}): {e}",
+                flush=True,
+            )
+            if attempt < max_attempts:
+                time.sleep(retry_backoff_sec)
+
+    print(
+        f"[Astra][오류] AstraCamera 생성을 {max_attempts}회 모두 실패했습니다: {last_error}",
+        flush=True,
+    )
+    return None
 
 
 def load_calibration(path=CALIB_FILE):
@@ -886,13 +936,17 @@ class StereoCalibrator:
 
 def run_calibration(rgb_device_index=None):
 
-    cam = AstraCamera(
+    cam = create_astra_camera_with_retry(
         rgb_device_index=(
             rgb_device_index
             if rgb_device_index is not None
             else DEFAULT_DEBUG_RGB_DEVICE_INDEX
-        )
+        ),
+        debug=True,
     )
+    if cam is None:
+        print("[Astra] 캘리브레이션용 카메라 초기화에 실패했습니다.")
+        return
     try:
         calibrator = StereoCalibrator(cam)
         calibrator.run()
@@ -914,27 +968,23 @@ def preinitialize_astra_camera(rgb_device_index=None, debug=False):
         print(f"[Astra] 캘리브레이션 파일을 불러오지 못했습니다: {e}")
         return None
 
-    try:
-        if debug:
-            print("[Astra][진단][메인스레드] AstraCamera 생성 시작", flush=True)
-        cam = AstraCamera(
-            rgb_device_index=(
-                rgb_device_index
-                if rgb_device_index is not None
-                else DEFAULT_DEBUG_RGB_DEVICE_INDEX
-            ),
-            debug=debug,
-        )
-        if debug:
-            print("[Astra][진단][메인스레드] AstraCamera 생성 완료", flush=True)
+    cam = create_astra_camera_with_retry(
+        rgb_device_index=(
+            rgb_device_index
+            if rgb_device_index is not None
+            else DEFAULT_DEBUG_RGB_DEVICE_INDEX
+        ),
+        debug=debug,
+    )
+    if cam is None:
+        print("[Astra] 메인 스레드 사전 초기화 실패")
+        return None
 
-        if debug:
-            print("[Astra][진단][메인스레드] depth 스트림 시작", flush=True)
+    try:
         cam.start_depth()
-        if debug:
-            print("[Astra][진단][메인스레드] depth 스트림 시작 완료", flush=True)
     except Exception as e:
-        print(f"[Astra] 메인 스레드 사전 초기화 실패: {e}")
+        print(f"[Astra] 메인 스레드 depth 스트림 시작 실패: {e}")
+        cam.release()
         return None
 
     return (cam, *calib)
@@ -981,16 +1031,8 @@ def run_debug_skeleton_viewer(
     viewer = None
     cam = precreated[0] if precreated is not None else None
     try:
-        if precreated is not None:
-            if debug:
-                print(
-                    "[Astra][진단] 1/4 사전 생성된 AstraCamera 재사용 (메인 스레드에서 초기화됨)",
-                    flush=True,
-                )
-        else:
-            if debug:
-                print("[Astra][진단] 1/4 AstraCamera 생성 시작", flush=True)
-            cam = AstraCamera(
+        if precreated is None:
+            cam = create_astra_camera_with_retry(
                 rgb_device_index=(
                     rgb_device_index
                     if rgb_device_index is not None
@@ -998,14 +1040,11 @@ def run_debug_skeleton_viewer(
                 ),
                 debug=debug,
             )
-            if debug:
-                print("[Astra][진단] 1/4 AstraCamera 생성 완료", flush=True)
+            if cam is None:
+                print("[Astra] AstraCamera 생성 실패")
+                return
 
-            if debug:
-                print("[Astra][진단] 2/4 depth 스트림 시작", flush=True)
             cam.start_depth()
-            if debug:
-                print("[Astra][진단] 2/4 depth 스트림 시작 완료", flush=True)
 
         pose_model = mp_pose.Pose(
             min_detection_confidence=0.5, min_tracking_confidence=0.5
@@ -1031,21 +1070,10 @@ def run_debug_skeleton_viewer(
         frame_count = 0
         while not stop_event.is_set():
             frame_count += 1
-            if frame_count <= 5 or frame_count % 60 == 0:
-                if debug:
-                    print(
-                        f"[Astra][진단] 4/4 루프 프레임 #{frame_count} 시작", flush=True
-                    )
 
             rgb = cam.get_color_frame()
             depth = cam.get_depth_frame()
             if rgb is None or depth is None:
-                if frame_count <= 5:
-                    if debug:
-                        print(
-                            f"[Astra][진단] 프레임 #{frame_count}: rgb={rgb is None and 'None' or 'OK'}, depth={depth is None and 'None' or 'OK'} -> skip",
-                            flush=True,
-                        )
                 cv2.waitKey(1)
                 continue
 
