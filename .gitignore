@@ -3,3 +3,4 @@
 /__pycache__
 /calibration_data
 shorts_pool.json
+config.py
