@@ -360,3 +360,13 @@ Playwright(Chromium, headless) 인스타그램 브라우저 화면을 스트리�
 
 - 코드에는 주석을 두지 않는 것을 원칙으로 합니다. 동작을 바꾸는 수정을 할 때는 이 문서의
   관련 섹션도 함께 갱신해 주세요.
+
+### requirements.txt 버전 고정 이유
+
+`mediapipe==0.10.9`는 `numpy<2`를 요구하지만, `opencv-python`은 최근 버전부터
+`numpy>=2`를 요구합니다. 두 패키지를 모두 버전 고정 없이 설치하면 pip가 서로
+호환되지 않는 numpy 버전을 요구하는 상황(설치 실패 또는 "compiled against ABI
+version..." 런타임 오류)이 발생할 수 있습니다. 그래서 `requirements.txt`에서
+`opencv-python==4.9.0.80`(numpy 1.x 세대에서 빌드된 마지막 계열)과 `numpy<2`를
+명시적으로 고정해 두었습니다. mediapipe를 다른 버전으로 올리려면 그 버전이
+요구하는 numpy 상한을 먼저 확인하세요.

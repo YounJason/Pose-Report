@@ -1,6 +1,9 @@
+import os
+
 from playwright.sync_api import sync_playwright
 
-STORAGE_STATE_FILE = "instagram_state.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STORAGE_STATE_FILE = os.path.join(BASE_DIR, "instagram_state.json")
 VIEWPORT = {"width": 1200, "height": 900}
 START_URL = "https://www.instagram.com/"
 

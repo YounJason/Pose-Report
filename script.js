@@ -39,8 +39,6 @@ let generatedLLMAdvice = "";
 
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
-// pywebview의 js_api 브리지를 fetch() 기반 REST 호출로 대체한다. 브라우저
-// 프런트엔드는 늘 같은 origin(Flask 서버)에서 서빙되므로 CORS 설정이 필요 없다.
 const backendApi = {
     async toggle_camera(enabled) {
         await fetch('/api/toggle_camera', {
@@ -74,11 +72,6 @@ const backendApi = {
     }
 };
 
-// 백엔드(Python)가 프레임/카메라 준비 상태를 evaluate_js로 직접 호출해주던
-// pywebview 방식 대신, SSE(Server-Sent Events)로 브로드캐스트되는 메시지를
-// 구독해 동일한 window.updateFrame / window.onCameraReady 콜백을 호출한다.
-// 페이지 로드 시점에 바로 연결하므로, 이후 화면 전환/setup_and_start 호출과
-// 관계없이 프레임을 놓치지 않는다.
 (function connectEventStream() {
     const evtSource = new EventSource('/api/events');
     evtSource.onmessage = (e) => {
@@ -101,7 +94,6 @@ const backendApi = {
         }
     };
     evtSource.onerror = () => {
-        // 브라우저가 자동 재연결을 시도하므로 별도 처리는 하지 않는다.
     };
 })();
 
@@ -150,8 +142,6 @@ async function showScreen(index, useFade = true) {
             startCaptureLoop();
         }
 
-        // Safety fallback: if the backend never reports the camera as ready
-        // (e.g. hardware issue), don't leave the user stuck on this screen forever.
         clearTimeout(cameraLoadingTimeout);
         cameraLoadingTimeout = setTimeout(() => {
             if (currentIndex === 1) showScreen(2, true);
@@ -208,8 +198,6 @@ async function showScreen(index, useFade = true) {
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
         timeLeft = 30;
-        // The 30s timer stays paused until the user's sitting posture is
-        // confirmed and the 3-second pre-countdown finishes (see updateFrame).
         isPaused = true;
         sittingConfirmed = false;
         hidePreCountdown();
@@ -379,9 +367,6 @@ document.getElementById('btn-start').addEventListener('click', () => showScreen(
 document.getElementById('btn-restart').addEventListener('click', () => showScreen(2, true));
 document.getElementById('btn-print').addEventListener('click', () => window.print());
 
-// Called from the Python backend once the (webcam or Astra) camera has
-// delivered its first frame, i.e. the 3D camera load triggered on the
-// loading screen has finished. Auto-advance to the main screen.
 window.onCameraReady = function () {
     if (currentIndex === 1) {
         clearTimeout(cameraLoadingTimeout);
@@ -398,17 +383,14 @@ function hidePreCountdown() {
 
 function restartPreCountdownAnimation(numberEl) {
     numberEl.style.animation = 'none';
-    void numberEl.offsetWidth; // force reflow to restart the CSS animation
+    void numberEl.offsetWidth;
     numberEl.style.animation = '';
 }
 
-// Runs a 3-2-1 on-screen countdown after the user's seated posture is first
-// confirmed, and only resumes the 30s measurement timer once it completes.
 function startPreCountdown() {
     const overlay = document.getElementById('precountdown-overlay');
     const numberEl = document.getElementById('precountdown-number');
     if (!overlay || !numberEl) {
-        // Fallback: no overlay available, just start immediately.
         sittingConfirmed = true;
         isPaused = false;
         return;
@@ -452,8 +434,6 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
     if (isNormal === 1 || isNormal === 0) {
         statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
 
-        // Seated posture just became detected: run the 3-second pre-countdown
-        // before the 30s measurement timer is allowed to run.
         if (!sittingConfirmed && preCountdownTimeout === null) {
             isPaused = true;
             startPreCountdown();
@@ -490,9 +470,6 @@ window.addEventListener('keydown', (e) => {
         }
     }
     if (e.key === 'F11') {
-        // pywebview 창 전체화면 대신 브라우저 표준 Fullscreen API를 사용한다.
-        // 브라우저에 따라 F11이 기본 동작(네이티브 전체화면)을 가로챌 수도
-        // 있으므로, 여기서는 최선 노력(best-effort)으로만 토글한다.
         e.preventDefault();
         if (document.fullscreenElement) {
             document.exitFullscreen().catch(() => {});
@@ -500,8 +477,6 @@ window.addEventListener('keydown', (e) => {
             document.documentElement.requestFullscreen().catch(() => {});
         }
     }
-    // 브라우저 탭은 스크립트로 강제 종료할 수 없으므로 Escape 처리는 제거했다.
-    // (전체화면 상태에서는 브라우저가 Escape로 자동 종료해준다.)
 });
 
 const IG_VIEWPORT_WIDTH = 1200;

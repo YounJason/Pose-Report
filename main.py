@@ -61,8 +61,6 @@ PART_KOREAN = {
 
 PARTS = tuple(PART_LANDMARKS.keys())
 
-# 매 프레임(초당 최대 30회) 호출되는 포즈 분석 경로에서 매번 리스트/딕셔너리를
-# 새로 만들지 않도록 모듈 로드 시 한 번만 계산해서 재사용한다.
 _REQUIRED_LANDMARKS_2D = (
     NOSE,
     LEFT_EAR,
@@ -91,12 +89,6 @@ _THRESHOLD_METRIC_SOURCES = {p: "threshold" for p in PARTS}
 
 
 def _not_detected_result():
-    """포즈/필수 랜드마크가 인식되지 않았을 때 공통으로 반환하는 결과.
-
-    기존에는 동일한 10-튜플(및 내부 dict 2개)이 5곳에서 매 프레임마다
-    새로 생성되었다. 값 자체는 불변이므로 dict는 모듈 로드 시 한 번만
-    만들어 재사용하고, 튜플만 함수 호출 시 조립한다.
-    """
     return (
         "인식되지 않음",
         2,
@@ -158,8 +150,6 @@ def _axis_deviation_deg(v, axis):
 
 
 def _detect_leg_cross(landmarks, w, h):
-    # enum(mp_pose.PoseLandmark) 속성 접근 대신 모듈 상단의 정수 상수를 바로
-    # 인덱스로 사용해 매 프레임(최대 초당 30회) 반복되는 속성 조회 비용을 줄인다.
     def pt(idx):
         lm = landmarks[idx]
         return (int(lm.x * w), int(lm.y * h))
@@ -1171,9 +1161,32 @@ class InstagramStreamer:
     def scroll(self, dy):
         self._cmd_queue.put(("scroll", float(dy)))
 
+    _MAX_RESTART_BACKOFF_SEC = 30.0
+
     def _run(self):
-        try:
-            with sync_playwright() as p:
+        restart_delay = 1.0
+        while self._running:
+            try:
+                self._run_once()
+                restart_delay = 1.0
+            except Exception as e:
+                print(f"[Instagram] 스트리밍 스레드 오류: {e}", flush=True)
+            if not self._running:
+                break
+            print(f"[Instagram] {restart_delay:.0f}초 후 재연결을 시도합니다.", flush=True)
+            try:
+                kind, _ = self._cmd_queue.get(timeout=restart_delay)
+                if kind == "__stop__":
+                    break
+            except queue.Empty:
+                pass
+            restart_delay = min(self._MAX_RESTART_BACKOFF_SEC, restart_delay * 2)
+
+    def _run_once(self):
+        with sync_playwright() as p:
+            browser = None
+            context = None
+            try:
                 browser = p.chromium.launch(headless=True)
                 storage_state = (
                     IG_STORAGE_STATE_FILE
@@ -1194,7 +1207,7 @@ class InstagramStreamer:
                     storage_state=storage_state,
                 )
                 page = context.new_page()
-                page.goto(IG_START_URL, wait_until="domcontentloaded")
+                page.goto(IG_START_URL, wait_until="domcontentloaded", timeout=30000)
 
                 cdp = context.new_cdp_session(page)
 
@@ -1227,6 +1240,7 @@ class InstagramStreamer:
                     except queue.Empty:
                         continue
                     if kind == "__stop__":
+                        self._running = False
                         break
                     try:
                         if kind == "click":
@@ -1242,18 +1256,22 @@ class InstagramStreamer:
                     cdp.send("Page.stopScreencast")
                 except Exception:
                     pass
-                context.close()
-                browser.close()
                 print("[Instagram] 종료", flush=True)
-        except Exception as e:
-            print(f"[Instagram] 스트리밍 스레드 오류: {e}", flush=True)
+            finally:
+                if context is not None:
+                    try:
+                        context.close()
+                    except Exception:
+                        pass
+                if browser is not None:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
 
 
 class CameraApp:
     def __init__(self):
-        # pywebview 창 대신 브라우저 프런트엔드와 SSE(Server-Sent Events)로
-        # 통신한다. 프레임/상태 갱신은 self._sse_clients에 등록된 각 클라이언트
-        # 큐로 브로드캐스트되고, 프런트는 EventSource('/api/events')로 구독한다.
         self._sse_clients = []
         self._sse_lock = threading.Lock()
         self.camera_enabled = False
@@ -1264,11 +1282,7 @@ class CameraApp:
         self.cap = None
         self.lock = threading.Lock()
 
-        # 캡처가 비활성 상태일 때 매 10ms마다 깨어나 폴링하는 대신, 이벤트로
-        # 대기하다가 활성화되는 즉시 깨어나도록 한다 (불필요한 wake-up 제거).
         self._capture_active_event = threading.Event()
-        # Astra 스레드가 새 프레임을 넣었을 때 즉시 깨어나기 위한 이벤트.
-        # 기존에는 10ms 간격으로 계속 폴링했다.
         self._astra_frame_event = threading.Event()
 
         self.TURTLE_NECK_ANGLE_THRESHOLD = 18.0
@@ -1323,9 +1337,6 @@ class CameraApp:
                 self._sse_clients.remove(q)
 
     def _broadcast(self, payload):
-        # 카메라 프레임은 최대 초당 30회 브로드캐스트되므로, 구독자가 이를
-        # 처리하는 속도보다 빠르게 쌓이면(큐가 가득 차면) 오래된 프레임을
-        # 버리고 최신 프레임으로 교체한다 (실시간 스트림이므로 최신값만 의미있음).
         data = json.dumps(payload, ensure_ascii=False)
         with self._sse_lock:
             clients = list(self._sse_clients)
@@ -1684,106 +1695,131 @@ class CameraApp:
 
     def start_camera_thread(self):
 
+        consecutive_open_failures = 0
         while self.running:
-            if not self.capture_active:
-                self._close_webcam_monitor()
+            try:
+                if not self.capture_active:
+                    self._close_webcam_monitor()
+                    with self.lock:
+                        if self.cap:
+                            self.cap.release()
+                            self.cap = None
+                    consecutive_open_failures = 0
+                    self._capture_active_event.clear()
+                    self._capture_active_event.wait(timeout=0.5)
+                    continue
+
+                if self.camera_source == "astra":
+                    self._close_webcam_monitor()
+                    with self._debug_frame_lock:
+                        pending = self._debug_latest_frame
+                        self._debug_latest_frame = None
+                    if pending is None:
+                        self._astra_frame_event.wait(timeout=0.5)
+                        self._astra_frame_event.clear()
+                        continue
+                    if self.camera_enabled:
+                        frame, landmarks, w, h, points3d, valid = pending
+                        self._process_and_push_astra_frame(
+                            frame, landmarks, w, h, points3d, valid
+                        )
+                    continue
+
+                if self.cap is None or not self.cap.isOpened():
+                    with self.lock:
+                        if self.cap is None or not self.cap.isOpened():
+                            if self.cap is not None:
+                                try:
+                                    self.cap.release()
+                                except Exception:
+                                    pass
+                            self.cap = cv2.VideoCapture(self.current_camera_idx)
+                            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
+                            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
+                            if not self.cap.isOpened():
+                                consecutive_open_failures += 1
+                            else:
+                                consecutive_open_failures = 0
+
+                if self.cap is None or not self.cap.isOpened():
+                    backoff = min(2.0, 0.1 * consecutive_open_failures)
+                    if consecutive_open_failures and consecutive_open_failures % 300 == 1:
+                        print(
+                            f"[카메라] 카메라(index={self.current_camera_idx})를 열지 "
+                            f"못했습니다. 연결 상태를 확인하세요. (연속 실패 "
+                            f"{consecutive_open_failures}회)",
+                            flush=True,
+                        )
+                    time.sleep(backoff)
+                    continue
+
+                success, frame = self.cap.read()
+                if not success:
+                    time.sleep(0.03)
+                    continue
+
+                self._notify_camera_ready()
+
+                h, w, _ = frame.shape
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(rgb)
+                landmarks = results.pose_landmarks
+                if landmarks:
+                    mp.solutions.drawing_utils.draw_landmarks(
+                        frame, landmarks, mp_pose.POSE_CONNECTIONS
+                    )
+                    (
+                        status_text,
+                        is_normal,
+                        score,
+                        turtle_ang,
+                        torso_ang,
+                        shoulder_ang,
+                        pelvis_ang,
+                        leg_cross,
+                        metric_scores,
+                        metric_sources,
+                    ) = self._analyze_pose(landmarks.landmark, w, h)
+                else:
+                    (
+                        status_text,
+                        is_normal,
+                        score,
+                        turtle_ang,
+                        torso_ang,
+                        shoulder_ang,
+                        pelvis_ang,
+                        leg_cross,
+                        metric_scores,
+                        metric_sources,
+                    ) = _not_detected_result()
+
+                self._show_webcam_monitor(frame)
+
+                if self.camera_enabled:
+                    self._push_frame(
+                        frame,
+                        status_text,
+                        is_normal,
+                        score,
+                        turtle_ang,
+                        torso_ang,
+                        shoulder_ang,
+                        pelvis_ang,
+                        leg_cross,
+                        metric_scores,
+                        metric_sources,
+                    )
+            except Exception as e:
+                print(f"[카메라] 프레임 처리 중 오류(계속 진행): {e}", flush=True)
                 with self.lock:
                     if self.cap:
-                        self.cap.release()
+                        try:
+                            self.cap.release()
+                        except Exception:
+                            pass
                         self.cap = None
-                self._capture_active_event.clear()
-                # 10ms 폴링 대신, capture_active가 True가 될 때(setup_and_start)
-                # 또는 종료될 때 즉시 깨어난다. 타임아웃은 running 플래그를
-                # 주기적으로 재확인하기 위한 안전장치일 뿐이다.
-                self._capture_active_event.wait(timeout=0.5)
-                continue
-
-            if self.camera_source == "astra":
-                self._close_webcam_monitor()
-                with self._debug_frame_lock:
-                    pending = self._debug_latest_frame
-                    self._debug_latest_frame = None
-                if pending is None:
-                    # 새 Astra 프레임이 도착하면 _on_astra_frame이 이 이벤트를
-                    # set()하여 즉시 깨운다. 10ms 폴링 제거.
-                    self._astra_frame_event.wait(timeout=0.5)
-                    self._astra_frame_event.clear()
-                    continue
-                if self.camera_enabled:
-                    frame, landmarks, w, h, points3d, valid = pending
-                    self._process_and_push_astra_frame(
-                        frame, landmarks, w, h, points3d, valid
-                    )
-                continue
-
-            # cap이 이미 열려 있는 정상 경로에서는 매 프레임 락을 잡지 않고
-            # 먼저 락 없이 확인한 뒤, 실제로 (재)생성이 필요할 때만 락을 잡는다
-            # (double-checked locking) — 초당 수십 회 반복되는 핫패스에서
-            # 불필요한 락 획득/해제 비용을 없앤다.
-            if self.cap is None or not self.cap.isOpened():
-                with self.lock:
-                    if self.cap is None or not self.cap.isOpened():
-                        self.cap = cv2.VideoCapture(self.current_camera_idx)
-                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
-                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 600)
-
-            success, frame = self.cap.read()
-            if not success:
-                time.sleep(0.03)
-                continue
-
-            self._notify_camera_ready()
-
-            h, w, _ = frame.shape
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(rgb)
-            landmarks = results.pose_landmarks
-            if landmarks:
-                mp.solutions.drawing_utils.draw_landmarks(
-                    frame, landmarks, mp_pose.POSE_CONNECTIONS
-                )
-                (
-                    status_text,
-                    is_normal,
-                    score,
-                    turtle_ang,
-                    torso_ang,
-                    shoulder_ang,
-                    pelvis_ang,
-                    leg_cross,
-                    metric_scores,
-                    metric_sources,
-                ) = self._analyze_pose(landmarks.landmark, w, h)
-            else:
-                (
-                    status_text,
-                    is_normal,
-                    score,
-                    turtle_ang,
-                    torso_ang,
-                    shoulder_ang,
-                    pelvis_ang,
-                    leg_cross,
-                    metric_scores,
-                    metric_sources,
-                ) = _not_detected_result()
-
-            self._show_webcam_monitor(frame)
-
-            if self.camera_enabled:
-                self._push_frame(
-                    frame,
-                    status_text,
-                    is_normal,
-                    score,
-                    turtle_ang,
-                    torso_ang,
-                    shoulder_ang,
-                    pelvis_ang,
-                    leg_cross,
-                    metric_scores,
-                    metric_sources,
-                )
+                time.sleep(0.2)
 
         self._close_webcam_monitor()
         with self.lock:
@@ -1886,9 +1922,6 @@ class CameraApp:
         )
 
     def _notify_camera_ready(self):
-        # SSE 구독은 프런트엔드가 페이지를 불러올 때 바로 시작되므로(EventSource가
-        # setup_and_start 호출보다 먼저 연결됨), pywebview 때와 달리 별도로 창
-        # 로드를 기다릴 필요가 없다. 최초 프레임이 들어온 시점에 한 번만 알린다.
         with self.lock:
             if self._camera_ready_fired:
                 return
@@ -1918,7 +1951,7 @@ class CameraApp:
     def on_closing(self):
         self.running = False
         self.capture_active = False
-        self._capture_active_event.set()  # 종료 시 대기 중인 루프를 즉시 깨움
+        self._capture_active_event.set()
         self._stop_astra_capture()
         self._close_webcam_monitor()
 
@@ -2046,10 +2079,6 @@ class CameraApp:
 
 
 def create_flask_app(app_logic, instagram_streamer):
-    # pywebview의 js_api 브리지를 대체하는 REST/SSE 엔드포인트 모음.
-    # 프런트엔드(index.html/script.js/frontend.html/style.css)는 이 Flask
-    # 앱이 그대로 정적 파일로 서빙하므로, 별도의 프런트엔드 서버나 CORS
-    # 설정이 필요 없다 (같은 origin에서 fetch/EventSource 사용).
     flask_app = Flask(__name__, static_folder=None)
 
     @flask_app.get("/")
@@ -2058,10 +2087,11 @@ def create_flask_app(app_logic, instagram_streamer):
 
     @flask_app.get("/<path:filename>")
     def static_files(filename):
-        # frontend.html, script.js, style.css 등 프로젝트 폴더의 정적 파일을
-        # 그대로 서빙한다. calibration_data 등 하위 폴더 접근은 막는다.
         safe_path = os.path.normpath(os.path.join(BASE_DIR, filename))
-        if not safe_path.startswith(BASE_DIR) or not os.path.isfile(safe_path):
+        if (
+            not (safe_path == BASE_DIR or safe_path.startswith(BASE_DIR + os.sep))
+            or not os.path.isfile(safe_path)
+        ):
             return ("Not Found", 404)
         return send_from_directory(BASE_DIR, filename)
 
@@ -2092,22 +2122,25 @@ def create_flask_app(app_logic, instagram_streamer):
     @flask_app.post("/api/setup_and_start")
     def api_setup_and_start():
         body = request.get_json(force=True, silent=True) or {}
-        app_logic.setup_and_start(
-            turtle=body.get("turtle"),
-            torso=body.get("torso"),
-            shoulder=body.get("shoulder"),
-            pelvis=body.get("pelvis"),
-            head=body.get("head"),
-            spine=body.get("spine"),
-            camera_idx=body.get("camera_idx"),
-            camera_source=body.get("camera_source", "webcam"),
-            debug_cam_idx=body.get("debug_cam_idx"),
-            weight_neck=body.get("weight_neck", 25.0),
-            weight_trunk=body.get("weight_trunk", 30.0),
-            weight_shoulder=body.get("weight_shoulder", 30.0),
-            weight_pelvis=body.get("weight_pelvis", 15.0),
-            weight_leg_cross=body.get("weight_leg_cross", 1.0),
-        )
+        try:
+            app_logic.setup_and_start(
+                turtle=body.get("turtle"),
+                torso=body.get("torso"),
+                shoulder=body.get("shoulder"),
+                pelvis=body.get("pelvis"),
+                head=body.get("head"),
+                spine=body.get("spine"),
+                camera_idx=body.get("camera_idx"),
+                camera_source=body.get("camera_source", "webcam"),
+                debug_cam_idx=body.get("debug_cam_idx"),
+                weight_neck=body.get("weight_neck", 25.0),
+                weight_trunk=body.get("weight_trunk", 30.0),
+                weight_shoulder=body.get("weight_shoulder", 30.0),
+                weight_pelvis=body.get("weight_pelvis", 15.0),
+                weight_leg_cross=body.get("weight_leg_cross", 1.0),
+            )
+        except (TypeError, ValueError) as e:
+            return jsonify({"ok": False, "error": f"잘못된 설정 값: {e}"}), 400
         return jsonify({"ok": True})
 
     @flask_app.post("/api/toggle_camera")
@@ -2125,13 +2158,19 @@ def create_flask_app(app_logic, instagram_streamer):
     @flask_app.post("/api/ig_click")
     def api_ig_click():
         body = request.get_json(force=True, silent=True) or {}
-        instagram_streamer.click(body.get("x", 0), body.get("y", 0))
+        try:
+            instagram_streamer.click(body.get("x", 0), body.get("y", 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "잘못된 좌표 값"}), 400
         return jsonify({"ok": True})
 
     @flask_app.post("/api/ig_scroll")
     def api_ig_scroll():
         body = request.get_json(force=True, silent=True) or {}
-        instagram_streamer.scroll(body.get("dy", 0))
+        try:
+            instagram_streamer.scroll(body.get("dy", 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "잘못된 스크롤 값"}), 400
         return jsonify({"ok": True})
 
     return flask_app
@@ -2170,8 +2209,6 @@ def run_app():
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     print(f"[server] 브라우저에서 http://{host}:{port} 접속하세요.", flush=True)
-    # use_reloader=False는 필수: Flask 리로더가 켜지면 프로세스가 두 번
-    # 시작되어 카메라 스레드/Astra 캡처가 중복 실행된다.
     flask_app.run(host=host, port=port, threaded=True, debug=False, use_reloader=False)
 
 

@@ -1,7 +1,7 @@
-flask
-opencv-python
+flask>=3.0,<4
+opencv-python==4.9.0.80
 mediapipe==0.10.9
-numpy
-requests
-python-dotenv
-playwright
+numpy<2
+requests>=2.31,<3
+python-dotenv>=1.0,<2
+playwright>=1.40,<2
