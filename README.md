@@ -10,14 +10,14 @@
 - 다리 꼬기 감지
 - Astra Pro (RGB + Depth / 3D skeleton) 지원
 - Gemini 기반 AI 코칭 피드백 및 A4 리포트 인쇄
-- 참가자 화면에 인스타그램 브라우저를 스트리밍하는 Playwright 연동
+- 측정 중 참가자 화면에 신뢰 채널의 유튜브 쇼츠를 자동 순환 재생
 
 ## 파일 구조
 
 ```text
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
-├── login_instagram.py    # 인스타그램 로그인 세션(instagram_state.json) 저장용 1회성 스크립트
+├── config.py              # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
 ├── script.js
@@ -31,9 +31,9 @@ Pose-Report/
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 
-# 프로젝트 루트에 .env 생성 후 GEMINI_API_KEY, SUPABASE_ANON_KEY 등 설정
+# 프로젝트 루트에 .env 생성 후 GEMINI_API_KEY, SUPABASE_ANON_KEY, YOUTUBE_API_KEY 등 설정
+# config.py의 TRUSTED_YT_CHANNELS에 자동 재생할 유튜브 채널 ID 등록
 
 python main.py
 ```

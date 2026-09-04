@@ -10,6 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://www.youtube.com/iframe_api"></script>
 </head>
 
 <body>
@@ -54,9 +55,9 @@
         <div class="screen" id="screen-4">
             <div class="camera-layout">
                 <div class="viewfinder-wrapper" id="viewfinder-wrapper">
-                    <img id="viewfinder" alt="Instagram Feed">
+                    <div id="shorts-player"></div>
                     <img id="camera-view" alt="Camera Feed">
-                    <div class="ig-input-layer" id="ig-input-layer"></div>
+                    <button type="button" class="next-short-btn" id="btn-next-short">다음 영상</button>
                     <button type="button" class="view-toggle-btn" id="btn-toggle-view">카메라 화면 보기</button>
                     <div class="timer-badge" id="timer">60</div>
                     <div class="status-overlay status-unknown" id="status-box">인식되지 않음</div>

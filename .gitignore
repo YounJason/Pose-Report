@@ -2,5 +2,4 @@
 .env
 /__pycache__
 /calibration_data
-/vendor
-instagram_state.json
+shorts_pool.json

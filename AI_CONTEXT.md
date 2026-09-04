@@ -16,7 +16,7 @@
 - [시작하기](#시작하기)
   - [설치](#설치)
   - [환경 변수](#환경-변수-env)
-  - [인스타그램 로그인 세션 준비](#인스타그램-로그인-세션-준비-선택-최초-1회)
+  - [신뢰 채널 목록 설정](#신뢰-채널-목록-설정)
   - [서브커맨드 구조](#서브커맨드-구조)
   - [실행](#실행)
 - [프런트엔드-백엔드 통신 구조](#프런트엔드-백엔드-통신-구조)
@@ -31,10 +31,11 @@
   - [AI 피드백](#ai-피드백)
   - [최종 리포트 인쇄](#최종-리포트-인쇄)
   - [운영자 카메라 모니터링](#운영자-카메라-모니터링)
-- [인스타그램 스트리밍 Playwright 연동](#인스타그램-스트리밍-playwright-연동)
-  - [동작 구조](#동작-구조)
-  - [참가자 동시 접속에 대한 가정](#참가자-동시-접속에-대한-가정)
-  - [참고: 인스타그램 이용약관](#참고-인스타그램-이용약관)
+- [유튜브 쇼츠 자동 재생](#유튜브-쇼츠-자동-재생)
+  - [ShortsPoolManager 동작 구조](#shortspoolmanager-동작-구조)
+  - [프런트엔드 재생 구조](#프런트엔드-재생-구조)
+  - [쇼츠 / 카메라 화면 전환 토글](#쇼츠--카메라-화면-전환-토글)
+  - [배경: 왜 이 구조로 바뀌었는가](#배경-왜-이-구조로-바뀌었는가)
 - [기타](#기타)
 
 ## 개요
@@ -55,6 +56,7 @@
 - **다리 꼬기 휴리스틱**: 기존 선분 교차 기반 판정을 종합점수에 별도 감점으로 반영
 - **Astra Pro 지원**: RGB + Depth / 3D skeleton 경로를 지원하며, 유효한 3D 좌표가 있으면 각도 계산에 3D 좌표를 사용
 - **Depth 조회 벡터화**: 랜드마크별 depth 최근접 탐색을 프레임당 1회의 `cv2.distanceTransform` 호출로 처리 (자세한 내용은 [Astra Pro 3D Depth 지원](#astra-pro-3d-depth-지원) 참고)
+- **유튜브 쇼츠 자동 재생**: 측정 중 참가자 화면에 신뢰 채널의 최신 쇼츠를 자동으로 순환 재생 (자세한 내용은 [유튜브 쇼츠 자동 재생](#유튜브-쇼츠-자동-재생) 참고)
 
 ### 배경
 
@@ -66,7 +68,8 @@
 누구나 자신의 자세를 측정하고 맞춤형 피드백을 받을 수 있는 시스템을 만드는 것이
 개발 의도입니다. 전시 부스에서는 관람객이 카메라 앞에 착석해 자세를 측정하면, 측정이
 진행되는 동안 디스플레이로 화면을 재생해 관람객의 집중을 유도하고, 측정이 끝나면 분석
-결과와 AI 코칭 피드백을 화면에 표시하는 방식으로 운영합니다.
+결과와 AI 코칭 피드백을 화면에 표시하는 방식으로 운영합니다. 운영진(동아리 학생들)이
+전시 기간 내내 부스에 상주하며 기기를 관리합니다.
 
 ### 화면 구성
 
@@ -87,8 +90,7 @@
 ```text
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
-├── config.py              # 각도 threshold / 종합 점수 가중치 기본값
-├── login_instagram.py    # 인스타그램 로그인 세션(instagram_state.json) 저장용 1회성 스크립트
+├── config.py              # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록 기본값
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
 ├── script.js
@@ -98,23 +100,19 @@ Pose-Report/
 └── AI_CONTEXT.md           # 이 문서
 ```
 
+서버 실행 중 `shorts_pool.json`(쇼츠 후보 pool 캐시)이 프로젝트 루트에 자동 생성됩니다.
+API 재호출 없이도 재시작 시 이전 pool을 바로 쓰기 위한 캐시 파일이므로 버전관리에는
+포함하지 않는 것을 권장합니다.
+
 ## 시작하기
 
 ### 설치
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
-Python 3.11.x 환경을 기준으로 작성되었습니다. `playwright install chromium`은
-[인스타그램 스트리밍](#인스타그램-스트리밍-playwright-연동)에 필요한 브라우저 바이너리를
-설치합니다. Linux 서버에 처음 설치하는 경우 Chromium 실행에 필요한 시스템 라이브러리가
-없을 수 있으니, 아래 명령도 함께 실행하세요.
-
-```bash
-playwright install-deps chromium
-```
+Python 3.11.x 환경을 기준으로 작성되었습니다.
 
 ### 환경 변수 (`.env`)
 
@@ -123,27 +121,35 @@ playwright install-deps chromium
 ```bash
 GEMINI_API_KEY=여기에_Gemini_API_키
 SUPABASE_ANON_KEY=여기에_Supabase_anon_key
+YOUTUBE_API_KEY=여기에_YouTube_Data_API_v3_키
 # 선택: 기본값은 127.0.0.1:8000
 HOST=127.0.0.1
 PORT=8000
 ```
 
-### 인스타그램 로그인 세션 준비 (선택, 최초 1회)
+`YOUTUBE_API_KEY`는 [Google Cloud Console](https://console.cloud.google.com/)에서 프로젝트를
+만들고 "YouTube Data API v3"를 활성화한 뒤 발급받는 일반 API 키입니다. Instagram oEmbed와
+달리 별도의 앱 심사(App Review) 없이 즉시 발급되며, 무료 할당량(하루 10,000 유닛)으로
+충분합니다. 키가 없으면 [ShortsPoolManager](#shortspoolmanager-동작-구조)가 콘솔에 경고를
+남기고 쇼츠 재생 없이 나머지 기능(자세 분석 등)은 정상 동작합니다.
 
-인스타그램 계정 로그인은 headless 브라우저 안에서 직접 할 수 없으므로, 별도로 만든
-`login_instagram.py`를 헤드풀(창이 보이는) 모드로 한 번 실행해 로그인한 뒤 세션을
-저장해야 합니다. 준비해두지 않아도 앱은 실행되지만, 비로그인 상태로 진행됩니다.
-자세한 배경은 [인스타그램 스트리밍](#인스타그램-스트리밍-playwright-연동) 참고.
+### 신뢰 채널 목록 설정
 
-```bash
-python login_instagram.py
+`config.py`의 `TRUSTED_YT_CHANNELS`에 자동 재생할 유튜브 채널을 넣어두세요. 채널 ID
+(`UC`로 시작하는 24자, 예: `UCxxxxxxxxxxxxxxxxxxxxxx`)와 채널 핸들(`@`로 시작하는 표시
+이름, 예: `@ChannelName`)을 섞어서 넣어도 됩니다.
+
+```python
+TRUSTED_YT_CHANNELS = ["UCxxxxxxxxxxxxxxxxxxxxxx", "@SomeChannelHandle"]
 ```
 
-브라우저 창이 뜨면 인스타그램에 로그인한 뒤, 터미널로 돌아와 Enter를 누르면
-프로젝트 루트에 `instagram_state.json`이 저장됩니다. `main.py`는 서버 시작 시 이 파일이
-있으면 자동으로 불러와 로그인된 상태로 스트리밍을 시작하고, 없으면 콘솔에 경고를 남기고
-비로그인 상태로 진행합니다. `instagram_state.json`은 로그인 쿠키를 담고 있으므로
-`.gitignore`에 추가하는 등 외부에 노출되지 않도록 관리하세요.
+채널 ID는 `UC` + 22자 패턴으로 정규식 매칭해 바로 사용하고, 그 외의 값은 모두 핸들로
+간주해 `channels.list(part=id, forHandle=...)`로 실제 채널 ID를 조회한 뒤 사용합니다
+(`@` 접두사를 안 붙여도 자동으로 붙여서 조회). 핸들 → 채널 ID 조회 결과는
+`ShortsPoolManager._handle_cache`에 프로세스가 살아있는 동안 캐시되므로, 갱신 주기마다
+매번 다시 조회하며 API 할당량을 쓰지 않습니다. 목록이 비어 있거나 특정 항목의 조회가
+실패하면 그 항목만 건너뛰고 콘솔에 경고를 남기며, 나머지 채널의 후보 수집은 계속됩니다.
+자세한 배경은 [유튜브 쇼츠 자동 재생](#유튜브-쇼츠-자동-재생) 참고.
 
 ### 서브커맨드 구조
 
@@ -172,6 +178,12 @@ python main.py
 스트리밍하는 1인용 구조이므로, 여러 브라우저 탭/기기에서 동시에 접속해도 모두
 같은 카메라 피드를 보게 됩니다.
 
+참가자가 보는 브라우저(키오스크 화면)에서 유튜브 쇼츠가 소리와 함께 자동 재생되게
+하려면, 해당 브라우저를 `--autoplay-policy=no-user-gesture-required` 플래그로 실행하는
+것을 권장합니다. 이 플래그 없이는 최초 진입 시 브라우저 자동재생 정책 때문에 첫 영상이
+음소거 상태로 시작될 수 있습니다(자세한 내용은
+[프런트엔드 재생 구조](#프런트엔드-재생-구조) 참고).
+
 ## 프런트엔드-백엔드 통신 구조
 
 브라우저에는 파이썬 객체를 직접 호출할 수 있는 네이티브 브리지가 없으므로, JS ↔ Python
@@ -182,6 +194,7 @@ python main.py
   - `POST /api/toggle_camera` — `{ "enabled": bool }`로 분석 on/off (`CameraApp.toggle_camera`)
   - `GET /api/supabase_key` — Supabase anon key 조회 (`CameraApp.get_supabase_key`)
   - `POST /api/generate_llm_advice` — 측정 결과로 Gemini 코칭 피드백 생성 (`CameraApp.generate_llm_advice`)
+  - `GET /api/next_short` — 쇼츠 pool에서 다음 영상 ID 하나 조회 (`ShortsPoolManager.next_video_id`)
 - **Python → JS**: `GET /api/events`로 여는 SSE(Server-Sent Events) 스트림 하나.
   카메라 프레임(`type: "frame"`)과 카메라 준비 완료(`type: "camera_ready"`) 메시지를
   JSON으로 브로드캐스트하며, `script.js`가 페이지 로드 시점에 `EventSource`로 구독해
@@ -318,7 +331,7 @@ UI 요소에는 `no-print` 클래스를 붙여 관리합니다.
 (`cfg-mirror`)는 `CameraApp.mirror_camera`로 전달되며, 서버(Python) 쪽에서는 운영자용
 모니터링 화면에만 영향을 줍니다. SSE로 전송되는 원본 `frame` 이미지나 각도 계산에는
 전혀 영향을 주지 않습니다. 다만 `script.js`가 같은 체크박스 값을 브라우저에서 다시 읽어,
-[참가자 화면의 카메라 토글 뷰(`#camera-view`)](#인스타그램--카메라-화면-전환-토글)에
+[참가자 화면의 카메라 토글 뷰(`#camera-view`)](#쇼츠--카메라-화면-전환-토글)에
 CSS로 별도 반전을 적용합니다 — 이는 서버 로직과 무관한 순수 프런트엔드 처리입니다.
 - **MediaPipe 웹캠**: `_show_webcam_monitor()`가 `cv2.imshow`에 넘기기 직전에만
   `cv2.flip(frame, 1)`로 복사본을 만들어 표시합니다. `_push_frame()`으로 참가자에게 보내는
@@ -327,93 +340,104 @@ CSS로 별도 반전을 적용합니다 — 이는 서버 로직과 무관한 �
   `pts[:, 0] *= -1`을 적용합니다. 각도 계산에 쓰이는 원본 `points3d`와 참가자 화면으로
   전송되는 `disp` 프레임은 그대로 유지됩니다.
 
-## 인스타그램 스트리밍 Playwright 연동
+## 유튜브 쇼츠 자동 재생
 
-기존에 참가자 화면(`#viewfinder`)에 표시하던 카메라 프리뷰 대신, 서버가 백그라운드로 띄운
-Playwright(Chromium, headless) 인스타그램 브라우저 화면을 스트리밍합니다. 자세 분석 자체는
-기존과 동일하게 실제 카메라(웹캠/Astra)로 서버에서 계속 수행되며, 그 결과(점수/상태 텍스트)만
-타이머·상태 오버레이에 반영됩니다. 즉 참가자는 자신의 카메라 화면 대신 인스타그램 화면을
-보면서 측정을 받습니다.
+`screen-4`(30초 측정 화면)에서 참가자의 시선을 끌기 위해 유튜브 쇼츠를 자동으로 순환
+재생합니다. 자세 분석 자체는 기존과 동일하게 실제 카메라(웹캠/Astra)로 서버에서 계속
+수행되며, 그 결과(점수/상태 텍스트)만 타이머·상태 오버레이에 반영됩니다.
 
-설치 방법은 [시작하기 > 설치](#설치)를, 로그인 세션 준비 방법은
-[시작하기 > 인스타그램 로그인 세션 준비](#인스타그램-로그인-세션-준비-선택-최초-1회)를
-참고하세요.
+### ShortsPoolManager 동작 구조
 
-### 동작 구조
+`main.py`의 `ShortsPoolManager`가 백그라운드 스레드에서 4시간(`YT_SHORTS_REFRESH_INTERVAL_SEC`)
+마다 아래 순서로 재생 후보 pool을 갱신합니다.
 
-- `main.py`의 `InstagramStreamer`가 앱 시작 시(`run_app()`) 단 하나의 브라우저 세션을 열고,
-  프로세스가 살아있는 동안 계속 재사용합니다(참가자별로 새로 만들지 않음 — 기존 카메라와
-  동일하게 "1인용 공유" 구조).
-- Chromium은 `headless=True`로 실행되어 운영자 PC 화면에는 뜨지 않습니다. 화면은 항상
-  1200×900(4:3) 가상 뷰포트로 고정되며, 이는 `.viewfinder-wrapper`의 CSS
-  `aspect-ratio: 4/3`과 정확히 일치하도록 맞춰졌으므로 프런트엔드에서 크롭/레터박스 없이
-  좌표를 선형 변환만으로 매핑할 수 있습니다. 뷰포트 크기를 바꾸려면 `main.py`의
-  `IG_VIEWPORT_WIDTH`/`IG_VIEWPORT_HEIGHT`와 `script.js`의 동일한 이름의 상수, 그리고
-  `style.css`의 `.viewfinder-wrapper { aspect-ratio }`를 함께 맞춰야 합니다.
-- 프레임은 CDP `Page.startScreencast`로 push 방식으로 받아 SSE로 `{"type": "ig_frame",
-  "image": <base64 jpeg>}` 형태로 브로드캐스트합니다(기존 카메라 프레임과 같은
-  `/api/events` 채널을 공유하되 타입으로 구분). `script.js`는 `ig_frame` 수신 시 항상
-  최신 프레임을 `latestIgFrameSrc`에 저장해두지만, 실제로 `#viewfinder`에 그려 넣는 것은
-  `screen-4`가 보이고 있고 [화면 전환 토글](#인스타그램--카메라-화면-전환-토글)이
-  인스타그램 모드일 때뿐입니다. 기존 카메라 `frame` 이벤트도 마찬가지로 점수/상태 계산에는
-  항상 쓰이지만, `#camera-view` 렌더링은 카메라 모드일 때만 수행합니다.
+1. `config.TRUSTED_YT_CHANNELS`의 각 항목을 채널 ID로 정규화합니다. `UC`로 시작하는 24자
+   패턴이면 그대로 쓰고, 아니면 채널 핸들로 간주해 `channels.list(part=id, forHandle=...)`로
+   실제 채널 ID를 조회합니다(결과는 메모리에 캐시). 조회에 실패한 항목은 건너뜁니다.
+2. 정규화된 각 채널 ID에 대해 YouTube Data API v3의
+   `search.list(channelId=..., order=date, type=video)`로 최신 업로드 영상 ID를 가져옵니다
+   (채널당 `YT_SHORTS_PER_CHANNEL_FETCH`개).
+3. 모은 영상 ID를 `videos.list(part=status,contentDetails)`로 다시 조회해
+   `status.embeddable`(임베드 허용 여부), `status.madeForKids`(어린이용 여부),
+   재생 길이(`YT_SHORTS_MAX_DURATION_SEC` = 60초 이하)를 기준으로 필터링합니다.
+4. 필터링된 ID 목록을 pool로 저장하고 `shorts_pool.json`에 캐시합니다(재시작 시 API
+   재호출 없이 즉시 재생 가능하도록).
 
-### 인스타그램 / 카메라 화면 전환 토글
+`next_video_id()`는 pool을 무작위 순서로 섞은 큐에서 하나씩 꺼내 반환하고, 큐를 다 쓰면
+다시 섞습니다(같은 영상이 바로 연달아 나오지 않도록). `YOUTUBE_API_KEY`가 없거나
+`TRUSTED_YT_CHANNELS`가 비어 있으면 콘솔에 경고를 남기고 갱신을 건너뛰며, API 호출이
+실패해도(`requests.RequestException`) 다음 주기(`YT_SHORTS_REFRESH_RETRY_SEC` = 5분 후)에
+재시도합니다. 채널 조회는 채널별로 개별 예외 처리를 하므로, 채널 하나가 실패해도 나머지
+채널의 후보 수집은 계속됩니다.
 
-`screen-4`(`.viewfinder-wrapper`)에는 `#viewfinder`(인스타그램)와 `#camera-view`(실제
-카메라 원본, 자세 분석에 쓰이는 것과 같은 프레임) 두 개의 `<img>`가 겹쳐 있고,
-좌측 상단 `#btn-toggle-view` 버튼으로 둘 중 보여줄 화면을 전환합니다
-(`script.js`의 `setIgViewMode('instagram' | 'camera')`). `screen-4`에 진입할 때마다
-인스타그램 화면으로 초기화됩니다.
+### 프런트엔드 재생 구조
 
-카메라 화면이 보이는 동안에는 `#ig-input-layer`가 `pointer-events: none`이 되어 인스타그램
-탭/스크롤 조작(`/api/ig_click`, `/api/ig_scroll`)이 전달되지 않습니다. 타이머·상태
-오버레이·사전 카운트다운은 기존과 동일하게 두 화면 위에 그대로 얹힙니다.
+`index.html`의 `#shorts-player`는 유튜브 IFrame Player API(`youtube.com/iframe_api`)로
+생성된 플레이어를 담는 컨테이너입니다. `script.js`의 `onYouTubeIframeAPIReady()`가
+API 로드 완료 시 자동 호출되어 플레이어를 생성하고(`controls: 0`, `modestbranding: 1`로
+자체 UI를 최소화), `loadNextShort()`가 `GET /api/next_short`로 다음 영상 ID를 받아
+`player.loadVideoById()`로 교체합니다.
 
-**프레임 디코딩은 항상 "현재 보이는 화면"만 수행합니다.** SSE로 `ig_frame`/`frame`이 올
-때마다 최신 base64를 `latestIgFrameSrc`/`latestCameraFrameSrc`에 저장은 하지만, 실제로
-`img.src`에 그려 넣는(`createFrameRenderer`가 만드는 렌더 함수 호출) 것은 해당 이미지가
-현재 활성 모드일 때뿐입니다. 안 보이는 쪽을 계속 디코딩하면 CPU 부하가 두 배가 되어
-양쪽 다 버벅이는 원인이 되므로, 토글 전환 시 저장해둔 최신 프레임을 즉시 한 번 그려 넣는
-방식으로 전환 시 화면이 비지 않게 합니다.
+**자동 전환 없이 참가자가 버튼으로만 다음 영상으로 넘어갑니다.** `screen-4` 진입 시 영상
+하나를 자동으로 로드하지만, 그 이후 다음 영상으로의 전환은 `#btn-next-short`("다음 영상")
+버튼을 눌러야만 일어납니다. 영상이 재생 중 끝나도 자동으로 다음 곡으로 넘어가지 않고
+그대로 정지 상태로 남습니다. `screen-4`를 벗어나면(`showScreen`에서 이전 `currentIndex`가
+4였던 경우) `shortsPlayer.stopVideo()`로 재생을 멈춥니다.
 
-**프레임 렌더링에는 busy-drop 가드가 걸려 있습니다.** `img.src`를 설정하면 브라우저의
-디코딩·페인트는 비동기로 일어나는데, 이전 프레임이 아직 `load`/`error` 이벤트를 못 받은
-상태에서 새 프레임이 도착하면 무작정 `src`를 다시 덮어쓰지 않고 최신 값만 보관해뒀다가
-이전 디코딩이 끝나는 즉시 그립니다(`createFrameRenderer`). 이렇게 하지 않으면 JS 메인
-스레드가 디코딩으로 바쁜 동안 SSE 메시지가 여러 개 쌓였다가 한꺼번에 몰아서 재생되는
-"버퍼링 후 빨리감기" 현상이 생깁니다.
+**자동재생 정책**: `loadVideoById()`는 즉시 재생을 시도하지만, 브라우저의 자동재생
+정책상 사용자 제스처 없이 소리가 있는 채로 자동재생되지 않을 수 있습니다. `loadNextShort()`
+안에서 `player.unMute()`를 함께 호출해 최대한 소리가 나도록 시도하지만, 완전히 보장하려면
+[실행](#실행) 섹션에 안내된 대로 참가자용 브라우저를
+`--autoplay-policy=no-user-gesture-required` 플래그로 실행하는 것을 권장합니다.
 
-**좌우 반전이 참가자 화면에도 적용됨**: `#camera-view`가 보이는 동안에는 설정 화면의
-`cfg-mirror` 체크박스 값을 읽어 `mirrored` 클래스(`transform: scaleX(-1)`)를 CSS로
-적용합니다. 이는 [아래 운영자 모니터링 섹션](#운영자-카메라-모니터링)에 설명된 기존의
-"모니터링 전용" 반전과는 별개의 순수 프런트엔드(브라우저) 처리이며, 서버가 SSE로 보내는
-원본 `frame` 이미지 자체나 각도 계산에는 영향을 주지 않습니다.
-- 참가자의 탭(클릭)/드래그(스크롤) 입력은 `#ig-input-layer`(투명 레이어, `#viewfinder` 위,
-  타이머·상태 오버레이 아래)에서 Pointer Events로 잡아 `/api/ig_click`,
-  `/api/ig_scroll`로 서버에 전달합니다. 서버는 이 요청을 큐에 넣고, Playwright 객체를
-  생성한 스레드(`InstagramStreamer._run`) 안에서만 `page.mouse.click` / `page.mouse.wheel`을
-  호출합니다(Playwright sync API는 여러 스레드에서 동시에 호출하는 것을 보장하지 않으므로,
-  입력 처리를 전용 스레드로 직렬화했습니다). 데스크톱 마우스 휠 이벤트도 동일하게
-  `/api/ig_scroll`로 전달됩니다.
-- 오버레이(`.timer-badge`, `.status-overlay`, `.precountdown-overlay`)는 기존과 동일하게
-  `.viewfinder-wrapper` 안에서 인스타그램 스트림 위에 그대로 얹힙니다. 사전 카운트다운
-  중에는 `.precountdown-overlay`가 `z-index: 3`으로 전체를 덮으므로 그 동안은 참가자
-  입력이 자연스럽게 막힙니다(입력 레이어 자체를 막지는 않지만, 시각적으로는 카운트다운이
-  화면을 덮습니다).
+### 쇼츠 / 카메라 화면 전환 토글
 
-### 참가자 동시 접속에 대한 가정
+`screen-4`(`.viewfinder-wrapper`)에는 `#shorts-player`(유튜브 쇼츠)와 `#camera-view`(실제
+카메라 원본, 자세 분석에 쓰이는 것과 같은 프레임) 두 화면이 겹쳐 있고, 좌측 상단
+`#btn-toggle-view` 버튼으로 둘 중 보여줄 화면을 전환합니다(`script.js`의
+`setViewMode('shorts' | 'camera')`). `screen-4`에 진입할 때마다 쇼츠 화면으로
+초기화됩니다. 카메라 화면이 보이는 동안에는 "다음 영상" 버튼(`.next-short-btn`)이
+숨겨집니다(`.viewfinder-wrapper.mode-camera .next-short-btn { display: none; }`).
 
-카메라와 마찬가지로 인스타그램 브라우저 세션도 프로세스 전체에서 하나만 존재하고 모든
-접속자가 공유합니다. 여러 명이 동시에 접속해 각자 스크롤/클릭을 보내면 하나의 화면에
-그대로 섞여서 반영됩니다(현재는 사실상 1인용 키오스크 구조를 그대로 따른 것입니다).
+타이머·상태 오버레이·사전 카운트다운은 기존과 동일하게 두 화면 위에 그대로 얹힙니다.
+`#camera-view`로의 카메라 프레임 렌더링은 [운영자 카메라 모니터링](#운영자-카메라-모니터링)에
+설명된 좌우 반전 로직을 그대로 따르며, `createFrameRenderer`의 busy-drop 가드(이전 프레임
+디코딩이 끝나지 않았으면 최신 프레임만 보관했다가 이어서 그리는 방식)도 동일하게 적용됩니다.
 
-### 참고: 인스타그램 이용약관
+뷰파인더는 `screen-4` 전체(페이지 전체 영역)를 차지합니다. `#screen-4`가 다른 화면과
+공유하는 `.screen`의 기본 `padding: 40px`를 id 선택자로 덮어써 `padding: 0`으로 만들고,
+`.camera-layout`/`.viewfinder-wrapper`를 각각 `width: 100%; height: 100%;`로 채워서
+화면 어디에도 여백 없이 꽉 차게 합니다. `.viewfinder-wrapper`의 배경은 흰색(`#ffffff`)이며,
+`display: flex; align-items: center; justify-content: center;`로 자식(쇼츠/카메라)을
+페이지 한가운데 배치합니다.
 
-이 기능은 운영자가 사전 로그인한 세션을 브라우저 자동화(Playwright)로 조작해 여러
-참가자가 돌아가며 사용하는 구조입니다. 인스타그램 이용약관은 자동화된 접근이나 계정
-공유에 제한을 둘 수 있으므로, 실제 행사/전시에 배포하기 전에 운영 주체가 별도로
-검토하는 것을 권장합니다.
+쇼츠(대체로 9:16)와 카메라 원본(대체로 4:3)은 이 흰 배경 위에 각자의 실제 비율 그대로,
+꽉 채우지 않고 떠 있는 형태로 표시하며 각각 모서리를 둥글게(`border-radius: 24px`)
+처리합니다. 레터박스/필러박스(미디어 배경색 띠)를 쓰지 않고 대신 두 방식으로 처리합니다.
+
+- **`#camera-view`**: `<img>`에 `width: auto; height: auto; max-width: 100%; max-height: 100%;`를
+  줘서 이미지 고유 해상도 비율 그대로 부모 공간에 맞을 때까지만 축소되도록 합니다(내용
+  없는 여백이 박스 안에 남지 않으므로, `border-radius`가 실제 이미지 가장자리에 딱
+  맞게 적용됩니다).
+- **`#shorts-player`**: 유튜브 iframe에는 `object-fit`이나 내재적 크기 기반 자동 크기
+  조절이 적용되지 않으므로, 컨테이너 자체를 `aspect-ratio: 9/16; height: 100%;`인 박스로
+  만들어 실제 쇼츠 비율과 정확히 맞춘 뒤(`.viewfinder-wrapper`의 flex 중앙 정렬로 배치),
+  `overflow: hidden`과 `border-radius`를 컨테이너에 적용합니다. 컨테이너 비율이 영상과
+  정확히 일치하므로 유튜브 자체 레터박스도 나타나지 않습니다.
+
+다른 비율의 콘텐츠를 쓰게 되면 `aspect-ratio` 값들을 함께 조정해야 합니다.
+
+### 배경: 왜 이 구조로 바뀌었는가
+
+원래는 서버가 Playwright(headless Chromium)로 인스타그램 브라우저 세션을 띄우고 화면을
+스크린샷 스트리밍하는 방식이었습니다. 이 방식은 (1) CDP `Page.startScreencast`가 영상만
+캡처하고 오디오 트랙이 없어 별도의 OS 레벨 오디오 캡처(VB-CABLE 가상 오디오 케이블 +
+WASAPI 루프백)가 필요했고, (2) 인스타그램 로그인 세션을 자동화 도구로 조작하는 구조라
+이용약관 리스크가 있었습니다. 유튜브 쇼츠 임베드(IFrame Player API)로 전환하면서 이 두
+문제가 모두 사라졌습니다 — 브라우저가 재생하는 진짜 `<video>`이므로 소리가 기본으로
+따라오고, 유튜브의 공식 임베드 방식이라 별도 세션 로그인이나 브라우저 자동화가
+필요 없습니다. 대신 참가자가 인스타그램 피드처럼 자유롭게 스크롤하며 탐색하는 경험은
+포기하고, 동아리가 미리 정한 신뢰 채널의 콘텐츠를 순환 재생하는 방식으로 바뀌었습니다.
 
 ## 기타
 

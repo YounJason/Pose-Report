@@ -4,6 +4,8 @@ import json
 import math
 import os
 import queue
+import random
+import re
 import signal
 import sys
 import threading
@@ -17,7 +19,6 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
-from playwright.sync_api import sync_playwright
 
 import config
 
@@ -188,10 +189,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CALIB_DIR = os.path.join(BASE_DIR, "calibration_data")
 CALIB_FILE = os.path.join(CALIB_DIR, "stereo_calibration.json")
 
-IG_VIEWPORT_WIDTH = 1200
-IG_VIEWPORT_HEIGHT = 900
-IG_START_URL = "https://www.instagram.com/"
-IG_STORAGE_STATE_FILE = os.path.join(BASE_DIR, "instagram_state.json")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
+YT_SHORTS_POOL_FILE = os.path.join(BASE_DIR, "shorts_pool.json")
+YT_SHORTS_REFRESH_INTERVAL_SEC = 4 * 60 * 60
+YT_SHORTS_REFRESH_RETRY_SEC = 5 * 60
+YT_SHORTS_PER_CHANNEL_FETCH = 15
+YT_SHORTS_MAX_DURATION_SEC = 60
 
 
 class AstraCamera:
@@ -1146,135 +1149,195 @@ def run_debug_skeleton_viewer(
         print("[Astra] 종료")
 
 
-class InstagramStreamer:
-    def __init__(self, broadcast_fn):
-        self._broadcast = broadcast_fn
-        self._cmd_queue = queue.Queue()
+class ShortsPoolManager:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._queue = []
+        self._all_ids = []
         self._running = True
+        self._handle_cache = {}
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._load_cache()
 
     def start(self):
         self._thread.start()
 
     def stop(self):
         self._running = False
-        self._cmd_queue.put(("__stop__", None))
 
-    def click(self, x, y):
-        x = max(0.0, min(float(IG_VIEWPORT_WIDTH), float(x)))
-        y = max(0.0, min(float(IG_VIEWPORT_HEIGHT), float(y)))
-        self._cmd_queue.put(("click", (x, y)))
+    def _load_cache(self):
+        try:
+            with open(YT_SHORTS_POOL_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            ids = data.get("video_ids", [])
+            if isinstance(ids, list) and ids:
+                with self._lock:
+                    self._all_ids = ids
+                    self._queue = random.sample(ids, len(ids))
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
 
-    def scroll(self, dy):
-        self._cmd_queue.put(("scroll", float(dy)))
+    def _save_cache(self, ids):
+        try:
+            with open(YT_SHORTS_POOL_FILE, "w", encoding="utf-8") as f:
+                json.dump({"video_ids": ids}, f, ensure_ascii=False)
+        except OSError:
+            pass
 
-    _MAX_RESTART_BACKOFF_SEC = 30.0
+    def next_video_id(self):
+        with self._lock:
+            if not self._queue:
+                if not self._all_ids:
+                    return None
+                self._queue = random.sample(self._all_ids, len(self._all_ids))
+            return self._queue.pop()
+
+    def _parse_iso8601_duration_sec(self, duration):
+        m = re.match(
+            r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", duration or ""
+        )
+        if not m:
+            return None
+        hours, minutes, seconds = (int(g) if g else 0 for g in m.groups())
+        return hours * 3600 + minutes * 60 + seconds
+
+    def _resolve_channel_id(self, channel_ref):
+        if re.match(r"^UC[A-Za-z0-9_-]{22}$", channel_ref):
+            return channel_ref
+
+        if channel_ref in self._handle_cache:
+            return self._handle_cache[channel_ref]
+
+        handle = channel_ref if channel_ref.startswith("@") else f"@{channel_ref}"
+        resp = requests.get(
+            "https://www.googleapis.com/youtube/v3/channels",
+            params={"key": YOUTUBE_API_KEY, "part": "id", "forHandle": handle},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if not items:
+            return None
+        channel_id = items[0]["id"]
+        self._handle_cache[channel_ref] = channel_id
+        return channel_id
+
+    def _fetch_channel_video_ids(self, channel_id):
+        resp = requests.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params={
+                "key": YOUTUBE_API_KEY,
+                "channelId": channel_id,
+                "part": "id",
+                "order": "date",
+                "type": "video",
+                "maxResults": YT_SHORTS_PER_CHANNEL_FETCH,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        return [
+            item["id"]["videoId"]
+            for item in items
+            if item.get("id", {}).get("videoId")
+        ]
+
+    def _filter_embeddable_shorts(self, video_ids):
+        if not video_ids:
+            return []
+        resp = requests.get(
+            "https://www.googleapis.com/youtube/v3/videos",
+            params={
+                "key": YOUTUBE_API_KEY,
+                "id": ",".join(video_ids),
+                "part": "status,contentDetails",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        result = []
+        for item in resp.json().get("items", []):
+            status = item.get("status", {})
+            content_details = item.get("contentDetails", {})
+            if not status.get("embeddable"):
+                continue
+            if status.get("madeForKids"):
+                continue
+            duration_sec = self._parse_iso8601_duration_sec(
+                content_details.get("duration")
+            )
+            if duration_sec is None or duration_sec > YT_SHORTS_MAX_DURATION_SEC:
+                continue
+            result.append(item["id"])
+        return result
+
+    def _refresh_once(self):
+        if not YOUTUBE_API_KEY:
+            print(
+                "[ShortsPool] YOUTUBE_API_KEY가 설정되어 있지 않습니다. "
+                ".env에 값을 채워주세요.",
+                flush=True,
+            )
+            return False
+        if not config.TRUSTED_YT_CHANNELS:
+            print(
+                "[ShortsPool] config.TRUSTED_YT_CHANNELS가 비어 있습니다. "
+                "신뢰할 채널 ID를 추가해주세요.",
+                flush=True,
+            )
+            return False
+
+        candidate_ids = []
+        for channel_ref in config.TRUSTED_YT_CHANNELS:
+            try:
+                channel_id = self._resolve_channel_id(channel_ref)
+            except requests.RequestException as e:
+                print(f"[ShortsPool] 채널 핸들 조회 실패 ({channel_ref}): {e}", flush=True)
+                continue
+            if channel_id is None:
+                print(f"[ShortsPool] 채널을 찾지 못했습니다: {channel_ref}", flush=True)
+                continue
+            try:
+                candidate_ids.extend(self._fetch_channel_video_ids(channel_id))
+            except requests.RequestException as e:
+                print(f"[ShortsPool] 채널 조회 실패 ({channel_ref}): {e}", flush=True)
+
+        candidate_ids = list(dict.fromkeys(candidate_ids))
+        filtered_ids = []
+        for i in range(0, len(candidate_ids), 50):
+            try:
+                filtered_ids.extend(
+                    self._filter_embeddable_shorts(candidate_ids[i : i + 50])
+                )
+            except requests.RequestException as e:
+                print(f"[ShortsPool] 영상 필터링 실패: {e}", flush=True)
+
+        if not filtered_ids:
+            print("[ShortsPool] 조건에 맞는 쇼츠를 찾지 못했습니다.", flush=True)
+            return False
+
+        with self._lock:
+            self._all_ids = filtered_ids
+            self._queue = random.sample(filtered_ids, len(filtered_ids))
+        self._save_cache(filtered_ids)
+        print(f"[ShortsPool] 갱신 완료: {len(filtered_ids)}개", flush=True)
+        return True
 
     def _run(self):
-        restart_delay = 1.0
         while self._running:
+            ok = False
             try:
-                self._run_once()
-                restart_delay = 1.0
+                ok = self._refresh_once()
             except Exception as e:
-                print(f"[Instagram] 스트리밍 스레드 오류: {e}", flush=True)
-            if not self._running:
-                break
-            print(f"[Instagram] {restart_delay:.0f}초 후 재연결을 시도합니다.", flush=True)
-            try:
-                kind, _ = self._cmd_queue.get(timeout=restart_delay)
-                if kind == "__stop__":
+                print(f"[ShortsPool] 갱신 중 오류: {e}", flush=True)
+            wait_sec = (
+                YT_SHORTS_REFRESH_INTERVAL_SEC if ok else YT_SHORTS_REFRESH_RETRY_SEC
+            )
+            for _ in range(int(wait_sec)):
+                if not self._running:
                     break
-            except queue.Empty:
-                pass
-            restart_delay = min(self._MAX_RESTART_BACKOFF_SEC, restart_delay * 2)
-
-    def _run_once(self):
-        with sync_playwright() as p:
-            browser = None
-            context = None
-            try:
-                browser = p.chromium.launch(headless=True)
-                storage_state = (
-                    IG_STORAGE_STATE_FILE
-                    if os.path.exists(IG_STORAGE_STATE_FILE)
-                    else None
-                )
-                if storage_state is None:
-                    print(
-                        f"[Instagram] 저장된 로그인 세션이 없습니다: {IG_STORAGE_STATE_FILE}. "
-                        "login_instagram.py를 먼저 실행해 로그인 세션을 저장하세요.",
-                        flush=True,
-                    )
-                context = browser.new_context(
-                    viewport={
-                        "width": IG_VIEWPORT_WIDTH,
-                        "height": IG_VIEWPORT_HEIGHT,
-                    },
-                    storage_state=storage_state,
-                )
-                page = context.new_page()
-                page.goto(IG_START_URL, wait_until="domcontentloaded", timeout=30000)
-
-                cdp = context.new_cdp_session(page)
-
-                def on_frame(params):
-                    try:
-                        self._broadcast({"type": "ig_frame", "image": params["data"]})
-                        cdp.send(
-                            "Page.screencastFrameAck",
-                            {"sessionId": params["sessionId"]},
-                        )
-                    except Exception as e:
-                        print(f"[Instagram] 프레임 처리 오류: {e}", flush=True)
-
-                cdp.on("Page.screencastFrame", on_frame)
-                cdp.send(
-                    "Page.startScreencast",
-                    {
-                        "format": "jpeg",
-                        "quality": 70,
-                        "maxWidth": IG_VIEWPORT_WIDTH,
-                        "maxHeight": IG_VIEWPORT_HEIGHT,
-                        "everyNthFrame": 1,
-                    },
-                )
-                print("[Instagram] 스트리밍 시작", flush=True)
-
-                while self._running:
-                    try:
-                        kind, payload = self._cmd_queue.get(timeout=0.2)
-                    except queue.Empty:
-                        continue
-                    if kind == "__stop__":
-                        self._running = False
-                        break
-                    try:
-                        if kind == "click":
-                            x, y = payload
-                            page.mouse.move(x, y)
-                            page.mouse.click(x, y)
-                        elif kind == "scroll":
-                            page.mouse.wheel(0, payload)
-                    except Exception as e:
-                        print(f"[Instagram] 입력 처리 오류: {e}", flush=True)
-
-                try:
-                    cdp.send("Page.stopScreencast")
-                except Exception:
-                    pass
-                print("[Instagram] 종료", flush=True)
-            finally:
-                if context is not None:
-                    try:
-                        context.close()
-                    except Exception:
-                        pass
-                if browser is not None:
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
+                time.sleep(1)
 
 
 class CameraApp:
@@ -2090,7 +2153,7 @@ class CameraApp:
         self._debug_stop_event = None
 
 
-def create_flask_app(app_logic, instagram_streamer):
+def create_flask_app(app_logic, shorts_pool_manager):
     flask_app = Flask(__name__, static_folder=None)
 
     @flask_app.get("/")
@@ -2157,23 +2220,10 @@ def create_flask_app(app_logic, instagram_streamer):
         advice = app_logic.generate_llm_advice(body)
         return jsonify({"advice": advice})
 
-    @flask_app.post("/api/ig_click")
-    def api_ig_click():
-        body = request.get_json(force=True, silent=True) or {}
-        try:
-            instagram_streamer.click(body.get("x", 0), body.get("y", 0))
-        except (TypeError, ValueError):
-            return jsonify({"ok": False, "error": "잘못된 좌표 값"}), 400
-        return jsonify({"ok": True})
-
-    @flask_app.post("/api/ig_scroll")
-    def api_ig_scroll():
-        body = request.get_json(force=True, silent=True) or {}
-        try:
-            instagram_streamer.scroll(body.get("dy", 0))
-        except (TypeError, ValueError):
-            return jsonify({"ok": False, "error": "잘못된 스크롤 값"}), 400
-        return jsonify({"ok": True})
+    @flask_app.get("/api/next_short")
+    def api_next_short():
+        video_id = shorts_pool_manager.next_video_id()
+        return jsonify({"videoId": video_id})
 
     return flask_app
 
@@ -2194,15 +2244,15 @@ def run_app():
             flush=True,
         )
 
-    instagram_streamer = InstagramStreamer(app_logic._broadcast)
-    instagram_streamer.start()
+    shorts_pool_manager = ShortsPoolManager()
+    shorts_pool_manager.start()
 
-    flask_app = create_flask_app(app_logic, instagram_streamer)
+    flask_app = create_flask_app(app_logic, shorts_pool_manager)
 
     def _handle_sigint(signum, frame):
         app_logic.on_closing()
         camera_thread.join(timeout=3.0)
-        instagram_streamer.stop()
+        shorts_pool_manager.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_sigint)

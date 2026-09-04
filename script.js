@@ -102,11 +102,59 @@ function createFrameRenderer(imgEl) {
     };
 }
 
-const renderViewfinder = createFrameRenderer(document.getElementById('viewfinder'));
 const renderCameraView = createFrameRenderer(document.getElementById('camera-view'));
 
-let latestIgFrameSrc = null;
 let latestCameraFrameSrc = null;
+
+let shortsPlayer = null;
+let shortsPlayerReady = false;
+let pendingShortVideoId = null;
+
+function onYouTubeIframeAPIReady() {
+    shortsPlayer = new YT.Player('shorts-player', {
+        width: '100%',
+        height: '100%',
+        playerVars: {
+            playsinline: 1,
+            controls: 0,
+            modestbranding: 1,
+            rel: 0
+        },
+        events: {
+            onReady: () => {
+                shortsPlayerReady = true;
+                if (pendingShortVideoId) {
+                    shortsPlayer.loadVideoById(pendingShortVideoId);
+                    pendingShortVideoId = null;
+                }
+            }
+        }
+    });
+}
+window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
+
+async function loadNextShort() {
+    let videoId = null;
+    try {
+        const res = await fetch('/api/next_short');
+        const data = await res.json();
+        videoId = data.videoId;
+    } catch (err) {
+        return;
+    }
+    if (!videoId) return;
+
+    if (shortsPlayerReady && shortsPlayer) {
+        shortsPlayer.loadVideoById(videoId);
+        shortsPlayer.unMute();
+    } else {
+        pendingShortVideoId = videoId;
+    }
+}
+
+document.getElementById('btn-next-short').addEventListener('click', () => {
+    loadNextShort();
+});
 
 (function connectEventStream() {
     const evtSource = new EventSource('/api/events');
@@ -125,11 +173,6 @@ let latestCameraFrameSrc = null;
             );
         } else if (data.type === 'camera_ready') {
             window.onCameraReady && window.onCameraReady();
-        } else if (data.type === 'ig_frame') {
-            latestIgFrameSrc = 'data:image/jpeg;base64,' + data.image;
-            if (currentIndex === 4 && igViewMode === 'instagram') {
-                renderViewfinder(latestIgFrameSrc);
-            }
         }
     };
     evtSource.onerror = () => {
@@ -156,6 +199,7 @@ async function showScreen(index, useFade = true) {
         preCountdownTimeout = null;
         sittingConfirmed = false;
         backendApi.toggle_camera(false);
+        if (shortsPlayerReady && shortsPlayer) shortsPlayer.stopVideo();
     }
 
     if (currentIndex === 3) clearInterval(privacyPollInterval);
@@ -233,7 +277,8 @@ async function showScreen(index, useFade = true) {
 
     if (currentIndex === 4) {
         backendApi.toggle_camera(true);
-        setIgViewMode('instagram');
+        setViewMode('shorts');
+        loadNextShort();
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
 
@@ -451,7 +496,7 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
 
     if (base64Image) {
         latestCameraFrameSrc = 'data:image/jpeg;base64,' + base64Image;
-        if (igViewMode === 'camera') {
+        if (viewMode === 'camera') {
             renderCameraView(latestCameraFrameSrc);
         }
     }
@@ -550,109 +595,24 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
-let igViewMode = 'instagram';
+let viewMode = 'shorts';
 
-function setIgViewMode(mode) {
-    igViewMode = mode;
+function setViewMode(mode) {
+    viewMode = mode;
 
     const wrapper = document.getElementById('viewfinder-wrapper');
     const toggleBtn = document.getElementById('btn-toggle-view');
     if (wrapper) wrapper.classList.toggle('mode-camera', mode === 'camera');
-    if (toggleBtn) toggleBtn.innerText = mode === 'camera' ? '인스타그램 화면 보기' : '카메라 화면 보기';
+    if (toggleBtn) toggleBtn.innerText = mode === 'camera' ? '쇼츠 화면 보기' : '카메라 화면 보기';
 
     if (mode === 'camera') {
         const cameraViewEl = document.getElementById('camera-view');
         const mirrorCheckbox = document.getElementById('cfg-mirror');
         if (cameraViewEl) cameraViewEl.classList.toggle('mirrored', !!(mirrorCheckbox && mirrorCheckbox.checked));
         if (latestCameraFrameSrc) renderCameraView(latestCameraFrameSrc);
-    } else if (mode === 'instagram') {
-        if (latestIgFrameSrc) renderViewfinder(latestIgFrameSrc);
     }
 }
 
 document.getElementById('btn-toggle-view').addEventListener('click', () => {
-    setIgViewMode(igViewMode === 'instagram' ? 'camera' : 'instagram');
+    setViewMode(viewMode === 'shorts' ? 'camera' : 'shorts');
 });
-
-const IG_VIEWPORT_WIDTH = 1200;
-const IG_VIEWPORT_HEIGHT = 900;
-const IG_SCROLL_SEND_INTERVAL_MS = 60;
-const IG_TAP_MOVE_THRESHOLD_PX = 8;
-const IG_TAP_MAX_DURATION_MS = 500;
-
-function mapClientToIgViewport(clientX, clientY) {
-    const img = document.getElementById('viewfinder');
-    const rect = img.getBoundingClientRect();
-    const x = (clientX - rect.left) * (IG_VIEWPORT_WIDTH / rect.width);
-    const y = (clientY - rect.top) * (IG_VIEWPORT_HEIGHT / rect.height);
-    return { x, y };
-}
-
-function sendIgClick(clientX, clientY) {
-    const { x, y } = mapClientToIgViewport(clientX, clientY);
-    fetch('/api/ig_click', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x, y })
-    }).catch(() => {});
-}
-
-function sendIgScroll(dy) {
-    fetch('/api/ig_scroll', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dy })
-    }).catch(() => {});
-}
-
-(function setupIgInputRelay() {
-    const layer = document.getElementById('ig-input-layer');
-    if (!layer) return;
-
-    let pointerDown = false;
-    let startX = 0;
-    let startY = 0;
-    let lastY = 0;
-    let startTime = 0;
-    let lastScrollSentAt = 0;
-
-    layer.addEventListener('pointerdown', (e) => {
-        if (currentIndex !== 4) return;
-        pointerDown = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        lastY = e.clientY;
-        startTime = Date.now();
-        layer.setPointerCapture(e.pointerId);
-    });
-
-    layer.addEventListener('pointermove', (e) => {
-        if (currentIndex !== 4 || !pointerDown) return;
-        const deltaY = lastY - e.clientY;
-        lastY = e.clientY;
-        const now = Date.now();
-        if (now - lastScrollSentAt >= IG_SCROLL_SEND_INTERVAL_MS && Math.abs(deltaY) > 0) {
-            sendIgScroll(deltaY * (IG_VIEWPORT_HEIGHT / layer.getBoundingClientRect().height));
-            lastScrollSentAt = now;
-        }
-    });
-
-    function endPointer(e) {
-        if (currentIndex !== 4 || !pointerDown) return;
-        pointerDown = false;
-        const movedDistance = Math.hypot(e.clientX - startX, e.clientY - startY);
-        const elapsed = Date.now() - startTime;
-        if (movedDistance <= IG_TAP_MOVE_THRESHOLD_PX && elapsed <= IG_TAP_MAX_DURATION_MS) {
-            sendIgClick(e.clientX, e.clientY);
-        }
-    }
-
-    layer.addEventListener('pointerup', endPointer);
-    layer.addEventListener('pointercancel', endPointer);
-
-    layer.addEventListener('wheel', (e) => {
-        if (currentIndex !== 4) return;
-        e.preventDefault();
-        sendIgScroll(e.deltaY);
-    }, { passive: false });
-})();
