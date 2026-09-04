@@ -1659,7 +1659,6 @@ class CameraApp:
         - 등/허리 안정도 점수: {metrics.get('torso')}점 / 100점
         - 어깨 균형 점수: {metrics.get('shoulder')}점 / 100점
         - 골반 균형 점수: {metrics.get('pelvis')}점 / 100점
-        - 각 항목의 산출 방식: 부위별 독립 ML 이진분류기(모델이 없는 항목은 threshold fallback)
         - 다리 꼬기 지속 시간: 측정 30초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
 
         위 점수를 바탕으로 사용자의 자세 습관과 우선적으로 개선할 부분, 추천하는 행동을 조언하세요.
