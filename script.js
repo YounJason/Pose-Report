@@ -459,6 +459,39 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
     }
 };
 
+function resetToInitialSetup() {
+    clearTimeout(cameraLoadingTimeout);
+    cameraLoadingTimeout = null;
+
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+
+    clearInterval(privacyPollInterval);
+    privacyPollInterval = null;
+
+    clearTimeout(reportLoadingTimeout);
+    reportLoadingTimeout = null;
+
+    clearInterval(typingInterval);
+    typingInterval = null;
+
+    hidePreCountdown();
+
+    timeLeft = 30;
+    isPaused = true;
+    sittingConfirmed = false;
+    captureLoopStarted = false;
+    currentUuid = "";
+
+    collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
+    finalReportData = { score: 0, turtle: 0, torso: 0, shoulder: 0, pelvis: 0, legCrossSeconds: 0 };
+    generatedLLMAdvice = "";
+
+    backendApi.toggle_camera(false);
+
+    showScreen(0, false);
+}
+
 window.addEventListener('keydown', (e) => {
     if (e.ctrlKey) {
         if (e.key === 'ArrowRight') {
@@ -467,6 +500,9 @@ window.addEventListener('keydown', (e) => {
         } else if (e.key === 'ArrowLeft') {
             e.preventDefault();
             showScreen(currentIndex - 1, false);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            resetToInitialSetup();
         }
     }
     if (e.key === 'F11') {

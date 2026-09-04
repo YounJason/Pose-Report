@@ -87,6 +87,7 @@
 ```text
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
+├── config.py              # 각도 threshold / 종합 점수 가중치 기본값
 ├── login_instagram.py    # 인스타그램 로그인 세션(instagram_state.json) 저장용 1회성 스크립트
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
@@ -192,6 +193,15 @@ python main.py
 전체화면(F11)은 브라우저 표준 Fullscreen API로 처리하며, 브라우저 탭은 스크립트로 강제
 종료할 수 없으므로 Escape 키로 창을 닫는 기능은 없습니다.
 
+운영자용 키보드 단축키(`script.js`의 전역 `keydown` 리스너)로 Ctrl+→/←는 화면을
+한 단계 앞/뒤로 전환하고, Ctrl+↑는 어느 화면에 있든 `resetToInitialSetup()`을 거쳐
+초기 설정 화면(screen 0)으로 즉시 이동합니다. `resetToInitialSetup()`은 타이머/폴링
+인터벌을 모두 정리하고 사전 카운트다운 오버레이를 닫은 뒤 `collectedMetrics` /
+`finalReportData` / `currentUuid` / `captureLoopStarted` 등 세션 상태를 초기값으로
+되돌리고 `backendApi.toggle_camera(false)`로 카메라 전송을 끕니다. 이렇게 어느 화면에서
+넘어오든 상태를 리셋한 뒤 이동해야 다음에 다시 측정을 시작할 때 이전 세션의 타이머나
+수집 중이던 지표가 섞여 들어오는 충돌을 피할 수 있습니다.
+
 ## 자세 분석 로직
 
 ### 각도 threshold 판정
@@ -209,12 +219,13 @@ pelvis   → PELVIS_ANGLE_THRESHOLD
 리포트의 4개 metric(`neck_score`, `torso_score`, `shoulder_score`, `pelvis_score`)은
 이 점수를 프레임별로 수집한 뒤 평균냅니다.
 
-**임계값/가중치 기본값과 index.html 동기화 주의**: `CameraApp.__init__`의 각도 threshold와
-가중치 기본값(`TURTLE_NECK_ANGLE_THRESHOLD`, `WEIGHT_NECK` 등)은 `index.html` 설정 화면의
-input `value` 속성과 항상 동일하게 맞춰야 합니다. 실사용 시에는 프런트가 `setup_and_start()`로
-자신의 DOM 값을 넘기므로 파이썬 쪽 기본값이 실제 동작에 영향을 주진 않지만, 두 값이 어긋나면
-코드/문서를 읽는 사람이 혼란을 겪을 수 있습니다. threshold나 가중치 기본값을 변경할 때는
-반드시 `index.html`도 함께 확인하세요.
+**임계값/가중치 기본값과 index.html 동기화 주의**: 각도 threshold와 가중치 기본값은
+`config.py`에 모아두었고, `CameraApp.__init__`과 `setup_and_start()`의 기본 인자값이
+이 값을 그대로 가져다 씁니다. 이 기본값은 `index.html` 설정 화면의 input `value` 속성과
+항상 동일하게 맞춰야 합니다. 실사용 시에는 프런트가 `setup_and_start()`로 자신의 DOM 값을
+넘기므로 `config.py`의 기본값이 실제 동작에 영향을 주진 않지만, 두 값이 어긋나면 코드/문서를
+읽는 사람이 혼란을 겪을 수 있습니다. threshold나 가중치 기본값을 변경할 때는 `config.py`와
+`index.html`을 함께 확인하세요.
 
 ### 종합 점수 가중치
 

@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from playwright.sync_api import sync_playwright
 
+import config
+
 NOSE = 0
 LEFT_EYE = 2
 RIGHT_EYE = 5
@@ -1285,18 +1287,18 @@ class CameraApp:
         self._capture_active_event = threading.Event()
         self._astra_frame_event = threading.Event()
 
-        self.TURTLE_NECK_ANGLE_THRESHOLD = 18.0
-        self.TORSO_ANGLE_THRESHOLD = 28.0
-        self.SHOULDER_ANGLE_THRESHOLD = 8.0
-        self.PELVIS_ANGLE_THRESHOLD = 7.0
-        self.HEAD_TILT_ANGLE_THRESHOLD = 5.0
-        self.SPINE_LEAN_ANGLE_THRESHOLD = 8.0
+        self.TURTLE_NECK_ANGLE_THRESHOLD = config.TURTLE_NECK_ANGLE_THRESHOLD
+        self.TORSO_ANGLE_THRESHOLD = config.TORSO_ANGLE_THRESHOLD
+        self.SHOULDER_ANGLE_THRESHOLD = config.SHOULDER_ANGLE_THRESHOLD
+        self.PELVIS_ANGLE_THRESHOLD = config.PELVIS_ANGLE_THRESHOLD
+        self.HEAD_TILT_ANGLE_THRESHOLD = config.HEAD_TILT_ANGLE_THRESHOLD
+        self.SPINE_LEAN_ANGLE_THRESHOLD = config.SPINE_LEAN_ANGLE_THRESHOLD
 
-        self.WEIGHT_NECK = 25.0
-        self.WEIGHT_TRUNK = 30.0
-        self.WEIGHT_SHOULDER = 30.0
-        self.WEIGHT_PELVIS = 15.0
-        self.WEIGHT_LEG_CROSS = 1.0
+        self.WEIGHT_NECK = config.WEIGHT_NECK
+        self.WEIGHT_TRUNK = config.WEIGHT_TRUNK
+        self.WEIGHT_SHOULDER = config.WEIGHT_SHOULDER
+        self.WEIGHT_PELVIS = config.WEIGHT_PELVIS
+        self.WEIGHT_LEG_CROSS = config.WEIGHT_LEG_CROSS
 
         self.camera_source = "webcam"
 
@@ -1364,11 +1366,11 @@ class CameraApp:
         camera_idx,
         camera_source="webcam",
         debug_cam_idx=None,
-        weight_neck=25.0,
-        weight_trunk=30.0,
-        weight_shoulder=30.0,
-        weight_pelvis=15.0,
-        weight_leg_cross=1.0,
+        weight_neck=config.WEIGHT_NECK,
+        weight_trunk=config.WEIGHT_TRUNK,
+        weight_shoulder=config.WEIGHT_SHOULDER,
+        weight_pelvis=config.WEIGHT_PELVIS,
+        weight_leg_cross=config.WEIGHT_LEG_CROSS,
     ):
         with self.lock:
             self.TURTLE_NECK_ANGLE_THRESHOLD = float(turtle)
