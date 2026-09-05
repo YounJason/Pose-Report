@@ -742,3 +742,14 @@ function setViewMode(mode) {
 document.getElementById('btn-toggle-view').addEventListener('click', () => {
     setViewMode(viewMode === 'shorts' ? 'camera' : 'shorts');
 });
+
+document.getElementById('shorts-scroll-shield').addEventListener('click', () => {
+    if (shortsPlayerReady && shortsPlayer) {
+        const state = shortsPlayer.getPlayerState();
+        if (state === YT.PlayerState.PLAYING) {
+            try { shortsPlayer.pauseVideo(); } catch (e) {}
+        } else {
+            try { shortsPlayer.playVideo(); } catch (e) {}
+        }
+    }
+});
