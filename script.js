@@ -119,14 +119,65 @@ let pendingShortVideoId = null;
 let shortsHistory = [];
 let shortsHistoryIndex = -1;
 let shortsFetchInFlight = false;
+let lastShortsDirection = 'next';
 
-function onYouTubeIframeAPIReady() {
-    shortsPlayer = new YT.Player('shorts-player', {
+const SHORTS_PLAYER_ID = 'shorts-player';
+const SHORTS_INTRO_COVER_MS = 1500;
+let shortsIntroCoverTimeout = null;
+
+function getShortsIntroCover() {
+    let cover = document.getElementById('shorts-intro-cover');
+    if (!cover) {
+        const wrap = document.getElementById('shorts-video-wrap');
+        if (!wrap) return null;
+        cover = document.createElement('div');
+        cover.id = 'shorts-intro-cover';
+        wrap.appendChild(cover);
+    }
+    return cover;
+}
+
+function showShortsIntroCover() {
+    const cover = getShortsIntroCover();
+    if (!cover) return;
+    if (shortsIntroCoverTimeout) clearTimeout(shortsIntroCoverTimeout);
+    cover.classList.remove('hidden');
+}
+
+function hideShortsIntroCoverSoon(delay) {
+    const cover = getShortsIntroCover();
+    if (!cover) return;
+    if (shortsIntroCoverTimeout) clearTimeout(shortsIntroCoverTimeout);
+    shortsIntroCoverTimeout = setTimeout(() => {
+        cover.classList.add('hidden');
+    }, delay);
+}
+
+function recreateShortsPlayerElement() {
+    const oldEl = document.getElementById(SHORTS_PLAYER_ID);
+    const wrap = document.getElementById('shorts-video-wrap') || (oldEl && oldEl.parentElement);
+    const freshEl = document.createElement('div');
+    freshEl.id = SHORTS_PLAYER_ID;
+
+    if (oldEl && oldEl.parentElement) {
+        oldEl.parentElement.replaceChild(freshEl, oldEl);
+    } else if (wrap) {
+        wrap.insertBefore(freshEl, wrap.firstChild);
+    }
+    return freshEl;
+}
+
+function createShortsPlayer() {
+    shortsPlayerReady = false;
+    recreateShortsPlayerElement();
+
+    shortsPlayer = new YT.Player(SHORTS_PLAYER_ID, {
         width: '100%',
         height: '100%',
         playerVars: {
             playsinline: 1,
             controls: 0,
+            autohide: 1,
             modestbranding: 1,
             rel: 0,
             cc_load_policy: 0,
@@ -138,8 +189,12 @@ function onYouTubeIframeAPIReady() {
                 shortsPlayerReady = true;
                 try { shortsPlayer.unloadModule('captions'); } catch (e) {}
                 if (pendingShortVideoId) {
-                    shortsPlayer.loadVideoById(pendingShortVideoId);
+                    const videoId = pendingShortVideoId;
                     pendingShortVideoId = null;
+                    showShortsIntroCover();
+                    shortsPlayer.loadVideoById(videoId);
+                    if (viewMode !== 'camera') { try { shortsPlayer.unMute(); } catch (e) {} }
+                    hideShortsIntroCoverSoon(SHORTS_INTRO_COVER_MS);
                 }
             },
             onStateChange: (event) => {
@@ -156,9 +211,31 @@ function onYouTubeIframeAPIReady() {
                 if (currentIndex !== 4) {
                     try { shortsPlayer.pauseVideo(); } catch (e) {}
                 }
+            },
+            onError: (event) => {
+                console.warn('[Shorts] 재생 불가(code=' + event.data + '), 건너뜀 (방향: ' + lastShortsDirection + ')');
+                if (currentIndex === 4) {
+                    skipBrokenShort();
+                }
             }
         }
     });
+}
+
+function recreateShortsPlayer(videoId) {
+    showShortsIntroCover();
+    if (shortsPlayer) {
+        try { shortsPlayer.destroy(); } catch (e) {}
+    }
+    shortsPlayer = null;
+    shortsPlayerReady = false;
+    if (videoId) pendingShortVideoId = videoId;
+    createShortsPlayer();
+}
+window.recreateShortsPlayer = recreateShortsPlayer;
+
+function onYouTubeIframeAPIReady() {
+    createShortsPlayer();
 }
 window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
 
@@ -192,21 +269,19 @@ function animateShortsTransition(direction) {
 }
 
 (function setupShortsAnimReset() {
-    const playerEl = document.getElementById('shorts-player');
-    if (!playerEl) return;
-    playerEl.addEventListener('animationend', (e) => {
-        e.currentTarget.classList.remove('shorts-anim-next', 'shorts-anim-prev');
+    const wrap = document.getElementById('shorts-video-wrap');
+    if (!wrap) return;
+    wrap.addEventListener('animationend', (e) => {
+        if (e.target && e.target.id === 'shorts-player') {
+            e.target.classList.remove('shorts-anim-next', 'shorts-anim-prev');
+        }
     });
 })();
 
 function playShortVideo(videoId, direction) {
     if (!videoId) return;
-    if (shortsPlayerReady && shortsPlayer) {
-        shortsPlayer.loadVideoById(videoId);
-        if (viewMode !== 'camera') shortsPlayer.unMute();
-    } else {
-        pendingShortVideoId = videoId;
-    }
+    lastShortsDirection = direction === 'prev' ? 'prev' : 'next';
+    recreateShortsPlayer(videoId);
     animateShortsTransition(direction);
 }
 
@@ -235,6 +310,14 @@ async function goToNextShort() {
 function goToPrevShort() {
     if (shortsHistoryIndex <= 0) return;
     goToShortAt(shortsHistoryIndex - 1, 'prev');
+}
+
+function skipBrokenShort() {
+    if (lastShortsDirection === 'prev' && shortsHistoryIndex > 0) {
+        goToPrevShort();
+    } else {
+        goToNextShort();
+    }
 }
 
 document.getElementById('btn-next-short').addEventListener('click', () => {

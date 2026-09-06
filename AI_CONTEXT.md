@@ -92,6 +92,7 @@
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
 ├── config.py             # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록 기본값
+├── load_shorts.py        # 신뢰 채널의 쇼츠를 조회해 shorts_pool.json을 생성/갱신 (main.py와 별도 프로세스로 실행)
 ├── run.bat               # main.py 워치독 (Windows 전용, 예기치 않은 종료 시 자동 재시작)
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
@@ -102,9 +103,9 @@ Pose-Report/
 └── AI_CONTEXT.md         # 이 문서
 ```
 
-서버 실행 중 `shorts_pool.json`(쇼츠 후보 pool 캐시)이 프로젝트 루트에 자동 생성됩니다.
-API 재호출 없이도 재시작 시 이전 pool을 바로 쓰기 위한 캐시 파일이므로 버전관리에는
-포함하지 않는 것을 권장합니다.
+`shorts_pool.json`(쇼츠 후보 pool 캐시)은 `main.py`가 아니라 `load_shorts.py`를 실행할 때
+프로젝트 루트에 생성/갱신됩니다. `main.py`는 이 파일을 읽기만 하므로 버전관리에는 포함하지
+않는 것을 권장합니다. 자세한 배경은 [유튜브 쇼츠 자동 재생](#유튜브-쇼츠-자동-재생) 참고.
 
 ## 시작하기
 
@@ -148,10 +149,10 @@ TRUSTED_YT_CHANNELS = ["UCxxxxxxxxxxxxxxxxxxxxxx", "@SomeChannelHandle"]
 채널 ID는 `UC` + 22자 패턴으로 정규식 매칭해 바로 사용하고, 그 외의 값은 모두 핸들로
 간주해 `channels.list(part=id, forHandle=...)`로 실제 채널 ID를 조회한 뒤 사용합니다
 (`@` 접두사를 안 붙여도 자동으로 붙여서 조회). 핸들 → 채널 ID 조회 결과는
-`ShortsPoolManager._handle_cache`에 프로세스가 살아있는 동안 캐시되므로, 갱신 주기마다
-매번 다시 조회하며 API 할당량을 쓰지 않습니다. 목록이 비어 있거나 특정 항목의 조회가
-실패하면 그 항목만 건너뛰고 콘솔에 경고를 남기며, 나머지 채널의 후보 수집은 계속됩니다.
-자세한 배경은 [유튜브 쇼츠 자동 재생](#유튜브-쇼츠-자동-재생) 참고.
+`load_shorts.py`의 `_handle_cache`에 스크립트 실행(프로세스) 동안만 캐시됩니다. 목록이
+비어 있거나 특정 항목의 조회가 실패하면 그 항목만 건너뛰고 콘솔에 경고를 남기며, 나머지
+채널의 후보 수집은 계속됩니다. 자세한 배경은
+[유튜브 쇼츠 자동 재생](#유튜브-쇼츠-자동-재생) 참고.
 
 ### 서브커맨드 구조
 
@@ -432,27 +433,55 @@ CSS로 별도 반전을 적용합니다 — 이는 서버 로직과 무관한 �
 
 ### ShortsPoolManager 동작 구조
 
-`main.py`의 `ShortsPoolManager`가 백그라운드 스레드에서 4시간(`YT_SHORTS_REFRESH_INTERVAL_SEC`)
-마다 아래 순서로 재생 후보 pool을 갱신합니다.
+원래는 `main.py`의 `ShortsPoolManager`가 백그라운드 스레드에서 직접 YouTube API를 호출해
+pool을 갱신했으나, 서버 기동 시 API 응답을 기다리느라 시작이 느려지는 문제가 있어 API
+조회/필터링 로직을 `load_shorts.py`라는 별도 스크립트로 완전히 분리했습니다. 지금은
+`main.py`와 `load_shorts.py`가 `shorts_pool.json` 파일을 매개로 통신하는 두 개의 독립된
+프로세스입니다.
 
-1. `config.TRUSTED_YT_CHANNELS`의 각 항목을 채널 ID로 정규화합니다. `UC`로 시작하는 24자
-   패턴이면 그대로 쓰고, 아니면 채널 핸들로 간주해 `channels.list(part=id, forHandle=...)`로
-   실제 채널 ID를 조회합니다(결과는 메모리에 캐시). 조회에 실패한 항목은 건너뜁니다.
-2. 정규화된 각 채널 ID에 대해 YouTube Data API v3의
-   `search.list(channelId=..., order=date, type=video)`로 최신 업로드 영상 ID를 가져옵니다
-   (채널당 `YT_SHORTS_PER_CHANNEL_FETCH`개).
-3. 모은 영상 ID를 `videos.list(part=status,contentDetails)`로 다시 조회해
-   `status.embeddable`(임베드 허용 여부), `status.madeForKids`(어린이용 여부),
-   재생 길이(`YT_SHORTS_MAX_DURATION_SEC` = 60초 이하)를 기준으로 필터링합니다.
-4. 필터링된 ID 목록을 pool로 저장하고 `shorts_pool.json`에 캐시합니다(재시작 시 API
-   재호출 없이 즉시 재생 가능하도록).
+- **`load_shorts.py`** (수동 실행. `python load_shorts.py`)
+  1. `config.TRUSTED_YT_CHANNELS`의 각 항목을 채널 ID로 정규화합니다. `UC`로 시작하는 24자
+     패턴이면 그대로 쓰고, 아니면 채널 핸들로 간주해 `channels.list(part=id, forHandle=...)`로
+     실제 채널 ID를 조회합니다(스크립트 실행 동안만 메모리에 캐시). 조회에 실패한 항목은
+     건너뜁니다.
+  2. 채널 ID의 `UC` 접두어를 `UUSH`로 바꿔 그 채널의 **쇼츠 업로드 전용 재생목록**을
+     `playlistItems.list(part=contentDetails, maxResults=50)`로 조회합니다(비공식이지만
+     널리 쓰이는 규칙; `playlistItems.list`는 1유닛만 소모해 `search.list`(100유닛)보다
+     훨씬 저렴합니다). 404 등으로 재생목록을 찾지 못하면(쇼츠를 올린 적 없는 채널)
+     `search.list(channelId=..., order=date, type=video, maxResults=50)`로 폴백합니다.
+     `maxResults=50`은 두 엔드포인트 모두 한 번의 요청에서 허용하는 최대치입니다.
+  3. 모은 영상 ID를 `videos.list(part=status,contentDetails)`로 다시 조회해
+     `status.embeddable`(임베드 허용 여부), `status.madeForKids`(어린이용 여부),
+     `status.privacyStatus`(공개 여부), 연령 제한(`contentRating.ytRating`), 재생 지역 제한
+     (`regionRestriction`, 기본 재생 지역 `KR` 기준), 재생 길이(`YT_SHORTS_MAX_DURATION_SEC`
+     = 60초 이하)를 기준으로 필터링합니다.
+  4. 채널별로 "조회한 영상 개수 → 필터를 통과한 개수(통과율, UUSH/search 중 어느 경로를
+     탔는지) → 풀에 반영된 개수"를 콘솔에 로그로 남깁니다. 특정 채널만 재생 목록에
+     편향되는 문제를 진단하기 위한 용도입니다(예: embed를 막아둔 채널은 통과율이 낮게
+     찍힘).
+  5. 필터를 통과한 개수가 `YT_SHORTS_PER_CHANNEL_CAP`(20)을 넘으면 해당 채널에서
+     무작위로 20개만 뽑아 풀에 반영합니다. 이 상한이 없으면 embed 허용률이 높은 채널이
+     전체 풀을 수십 개씩 독점해 재생이 특정 채널로 쏠리는 문제가 있었습니다.
+  6. 상한을 적용한 전체 ID 목록을 `shorts_pool.json`에 `{"video_ids": [...]}` 형태로
+     저장합니다. 채널 조회는 채널별로 개별 예외 처리를 하므로, 채널 하나가
+     실패해도(핸들 조회 실패, 영상 조회 실패, 필터링 실패 등) 나머지 채널의 후보 수집은
+     계속됩니다. `YOUTUBE_API_KEY`가 없거나 `TRUSTED_YT_CHANNELS`가 비어 있으면 콘솔에
+     경고를 남기고 종료합니다.
 
-`next_video_id()`는 pool을 무작위 순서로 섞은 큐에서 하나씩 꺼내 반환하고, 큐를 다 쓰면
-다시 섞습니다(같은 영상이 바로 연달아 나오지 않도록). `YOUTUBE_API_KEY`가 없거나
-`TRUSTED_YT_CHANNELS`가 비어 있으면 콘솔에 경고를 남기고 갱신을 건너뛰며, API 호출이
-실패해도(`requests.RequestException`) 다음 주기(`YT_SHORTS_REFRESH_RETRY_SEC` = 5분 후)에
-재시도합니다. 채널 조회는 채널별로 개별 예외 처리를 하므로, 채널 하나가 실패해도 나머지
-채널의 후보 수집은 계속됩니다.
+- **`main.py`의 `ShortsPoolManager`**: `shorts_pool.json`을 읽어서 `next_video_id()`로
+  제공하는 역할만 담당합니다. 생성 시점에 파일을 한 번 읽고, 이후 백그라운드 스레드가
+  `YT_SHORTS_POOL_RELOAD_CHECK_SEC`(5분)마다 파일의 mtime을 확인해 `load_shorts.py`가
+  파일을 갱신했으면 다시 불러옵니다. YouTube API를 직접 호출하지 않으므로 서버 기동이
+  즉시 이루어집니다. `next_video_id()`는 pool을 무작위 순서로 섞은 큐에서 하나씩 꺼내
+  반환하고, 큐를 다 쓰면 다시 섞습니다(같은 영상이 바로 연달아 나오지 않도록). 아직
+  `shorts_pool.json`이 없으면(= `load_shorts.py`를 한 번도 실행하지 않았으면) 콘솔에
+  안내를 남기고 쇼츠 재생 없이 나머지 기능은 정상 동작합니다.
+
+**주의**: `YT_SHORTS_PER_CHANNEL_CAP`으로 채널 하나가 풀을 독점하는 것은 막았지만,
+채널 수가 늘어나거나 특정 채널이 계속 통과율 0%에 가까우면(예: 쇼츠를 거의 안 올리거나
+전부 embed를 막아둔 채널) 여전히 그 채널의 노출은 0에 가깝게 유지됩니다. 이런 채널은
+`load_shorts.py` 실행 로그의 "필터 통과" 열로 걸러서 `config.TRUSTED_YT_CHANNELS`에서
+정리하는 것을 권장합니다.
 
 ### 프런트엔드 재생 구조
 

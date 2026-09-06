@@ -198,10 +198,7 @@ CALIB_FILE = os.path.join(CALIB_DIR, "stereo_calibration.json")
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 YT_SHORTS_POOL_FILE = os.path.join(BASE_DIR, "shorts_pool.json")
-YT_SHORTS_REFRESH_INTERVAL_SEC = 4 * 60 * 60
-YT_SHORTS_REFRESH_RETRY_SEC = 5 * 60
-YT_SHORTS_PER_CHANNEL_FETCH = 15
-YT_SHORTS_MAX_DURATION_SEC = 60
+YT_SHORTS_POOL_RELOAD_CHECK_SEC = 5 * 60
 
 
 class AstraCamera:
@@ -1183,7 +1180,7 @@ class ShortsPoolManager:
         self._queue = []
         self._all_ids = []
         self._running = True
-        self._handle_cache = {}
+        self._mtime = None
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._load_cache()
 
@@ -1195,6 +1192,7 @@ class ShortsPoolManager:
 
     def _load_cache(self):
         try:
+            self._mtime = os.path.getmtime(YT_SHORTS_POOL_FILE)
             with open(YT_SHORTS_POOL_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             ids = data.get("video_ids", [])
@@ -1202,15 +1200,13 @@ class ShortsPoolManager:
                 with self._lock:
                     self._all_ids = ids
                     self._queue = random.sample(ids, len(ids))
+                print(f"[ShortsPool] {len(ids)}개 로드 완료", flush=True)
         except (OSError, ValueError, json.JSONDecodeError):
-            pass
-
-    def _save_cache(self, ids):
-        try:
-            with open(YT_SHORTS_POOL_FILE, "w", encoding="utf-8") as f:
-                json.dump({"video_ids": ids}, f, ensure_ascii=False)
-        except OSError:
-            pass
+            print(
+                "[ShortsPool] shorts_pool.json을 찾을 수 없습니다. "
+                "load_shorts.py를 먼저 실행해주세요.",
+                flush=True,
+            )
 
     def next_video_id(self):
         with self._lock:
@@ -1220,153 +1216,18 @@ class ShortsPoolManager:
                 self._queue = random.sample(self._all_ids, len(self._all_ids))
             return self._queue.pop()
 
-    def _parse_iso8601_duration_sec(self, duration):
-        m = re.match(
-            r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", duration or ""
-        )
-        if not m:
-            return None
-        hours, minutes, seconds = (int(g) if g else 0 for g in m.groups())
-        return hours * 3600 + minutes * 60 + seconds
-
-    def _resolve_channel_id(self, channel_ref):
-        if re.match(r"^UC[A-Za-z0-9_-]{22}$", channel_ref):
-            return channel_ref
-
-        if channel_ref in self._handle_cache:
-            return self._handle_cache[channel_ref]
-
-        handle = channel_ref if channel_ref.startswith("@") else f"@{channel_ref}"
-        resp = requests.get(
-            "https://www.googleapis.com/youtube/v3/channels",
-            params={"key": YOUTUBE_API_KEY, "part": "id", "forHandle": handle},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        if not items:
-            return None
-        channel_id = items[0]["id"]
-        self._handle_cache[channel_ref] = channel_id
-        return channel_id
-
-    def _fetch_channel_video_ids(self, channel_id):
-        resp = requests.get(
-            "https://www.googleapis.com/youtube/v3/search",
-            params={
-                "key": YOUTUBE_API_KEY,
-                "channelId": channel_id,
-                "part": "id",
-                "order": "date",
-                "type": "video",
-                "maxResults": YT_SHORTS_PER_CHANNEL_FETCH,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        return [
-            item["id"]["videoId"]
-            for item in items
-            if item.get("id", {}).get("videoId")
-        ]
-
-    def _filter_embeddable_shorts(self, video_ids):
-        if not video_ids:
-            return []
-        resp = requests.get(
-            "https://www.googleapis.com/youtube/v3/videos",
-            params={
-                "key": YOUTUBE_API_KEY,
-                "id": ",".join(video_ids),
-                "part": "status,contentDetails",
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        result = []
-        for item in resp.json().get("items", []):
-            status = item.get("status", {})
-            content_details = item.get("contentDetails", {})
-            if not status.get("embeddable"):
-                continue
-            if status.get("madeForKids"):
-                continue
-            duration_sec = self._parse_iso8601_duration_sec(
-                content_details.get("duration")
-            )
-            if duration_sec is None or duration_sec > YT_SHORTS_MAX_DURATION_SEC:
-                continue
-            result.append(item["id"])
-        return result
-
-    def _refresh_once(self):
-        if not YOUTUBE_API_KEY:
-            print(
-                "[ShortsPool] YOUTUBE_API_KEY가 설정되어 있지 않습니다. "
-                ".env에 값을 채워주세요.",
-                flush=True,
-            )
-            return False
-        if not config.TRUSTED_YT_CHANNELS:
-            print(
-                "[ShortsPool] config.TRUSTED_YT_CHANNELS가 비어 있습니다. "
-                "신뢰할 채널 ID를 추가해주세요.",
-                flush=True,
-            )
-            return False
-
-        candidate_ids = []
-        for channel_ref in config.TRUSTED_YT_CHANNELS:
-            try:
-                channel_id = self._resolve_channel_id(channel_ref)
-            except requests.RequestException as e:
-                print(f"[ShortsPool] 채널 핸들 조회 실패 ({channel_ref}): {e}", flush=True)
-                continue
-            if channel_id is None:
-                print(f"[ShortsPool] 채널을 찾지 못했습니다: {channel_ref}", flush=True)
-                continue
-            try:
-                candidate_ids.extend(self._fetch_channel_video_ids(channel_id))
-            except requests.RequestException as e:
-                print(f"[ShortsPool] 채널 조회 실패 ({channel_ref}): {e}", flush=True)
-
-        candidate_ids = list(dict.fromkeys(candidate_ids))
-        filtered_ids = []
-        for i in range(0, len(candidate_ids), 50):
-            try:
-                filtered_ids.extend(
-                    self._filter_embeddable_shorts(candidate_ids[i : i + 50])
-                )
-            except requests.RequestException as e:
-                print(f"[ShortsPool] 영상 필터링 실패: {e}", flush=True)
-
-        if not filtered_ids:
-            print("[ShortsPool] 조건에 맞는 쇼츠를 찾지 못했습니다.", flush=True)
-            return False
-
-        with self._lock:
-            self._all_ids = filtered_ids
-            self._queue = random.sample(filtered_ids, len(filtered_ids))
-        self._save_cache(filtered_ids)
-        print(f"[ShortsPool] 갱신 완료: {len(filtered_ids)}개", flush=True)
-        return True
-
     def _run(self):
         while self._running:
-            ok = False
             try:
-                ok = self._refresh_once()
-            except Exception as e:
-                print(f"[ShortsPool] 갱신 중 오류: {e}", flush=True)
-            wait_sec = (
-                YT_SHORTS_REFRESH_INTERVAL_SEC if ok else YT_SHORTS_REFRESH_RETRY_SEC
-            )
-            for _ in range(int(wait_sec)):
+                mtime = os.path.getmtime(YT_SHORTS_POOL_FILE)
+                if mtime != self._mtime:
+                    self._load_cache()
+            except OSError:
+                pass
+            for _ in range(YT_SHORTS_POOL_RELOAD_CHECK_SEC):
                 if not self._running:
                     break
                 time.sleep(1)
-
 
 class CameraApp:
     def __init__(self):

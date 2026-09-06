@@ -17,7 +17,8 @@
 ```text
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
-├── config.py              # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록
+├── load_shorts.py        # 신뢰 채널의 쇼츠를 조회해 shorts_pool.json을 생성/갱신 (서버와 별도로 수동 실행)
+├── config.py             # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
 ├── script.js
@@ -34,6 +35,8 @@ pip install -r requirements.txt
 
 # 프로젝트 루트에 .env 생성 후 GEMINI_API_KEY, SUPABASE_ANON_KEY, YOUTUBE_API_KEY 등 설정
 # config.py의 TRUSTED_YT_CHANNELS에 자동 재생할 유튜브 채널 ID 등록
+
+python load_shorts.py
 
 python main.py
 ```
