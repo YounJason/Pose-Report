@@ -116,7 +116,6 @@ let shortsPlayer = null;
 let shortsPlayerReady = false;
 let pendingShortVideoId = null;
 
-// 쇼츠 탐색 히스토리 (이전/다음 이동을 위한 인덱스 관리)
 let shortsHistory = [];
 let shortsHistoryIndex = -1;
 let shortsFetchInFlight = false;
@@ -130,7 +129,7 @@ function onYouTubeIframeAPIReady() {
             controls: 0,
             modestbranding: 1,
             rel: 0,
-            cc_load_policy: 0,   // 자막 기본 off
+            cc_load_policy: 0,
             iv_load_policy: 3,
             disablekb: 1
         },
@@ -148,7 +147,6 @@ function onYouTubeIframeAPIReady() {
                     try { shortsPlayer.unloadModule('captions'); } catch (e) {}
                 }
                 if (event.data === YT.PlayerState.ENDED) {
-                    // 무한 반복 재생
                     shortsPlayer.seekTo(0, true);
                     shortsPlayer.playVideo();
                 }
@@ -189,7 +187,7 @@ function animateShortsTransition(direction) {
     const playerEl = document.getElementById('shorts-player');
     if (!playerEl) return;
     playerEl.classList.remove('shorts-anim-next', 'shorts-anim-prev');
-    void playerEl.offsetWidth; // 리플로우를 강제하여 애니메이션 재시작
+    void playerEl.offsetWidth;
     playerEl.classList.add(direction === 'prev' ? 'shorts-anim-prev' : 'shorts-anim-next');
 }
 
@@ -729,12 +727,10 @@ function setViewMode(mode) {
         const mirrorCheckbox = document.getElementById('cfg-mirror');
         if (cameraViewEl) cameraViewEl.classList.toggle('mirrored', !!(mirrorCheckbox && mirrorCheckbox.checked));
         if (latestCameraFrameSrc) renderCameraView(latestCameraFrameSrc);
-        // 카메라 화면일 때는 쇼츠 일시정지
         if (shortsPlayerReady && shortsPlayer) {
             try { shortsPlayer.pauseVideo(); } catch (e) {}
         }
     } else if (shortsPlayerReady && shortsPlayer) {
-        // 쇼츠 화면으로 복귀 시 재생 재개
         try { shortsPlayer.playVideo(); } catch (e) {}
     }
 }
