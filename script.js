@@ -5,7 +5,7 @@ let privacyPollInterval = null;
 let reportLoadingTimeout = null;
 let typingInterval = null;
 
-let timeLeft = 30;
+let timeLeft = 60;
 let isPaused = false;
 
 let captureLoopStarted = false;
@@ -483,12 +483,12 @@ async function showScreen(index, useFade = true) {
         worstScoreValue = null;
         worstScorePhotoSrc = null;
 
-        timeLeft = 30;
+        timeLeft = 60;
         isPaused = true;
         sittingConfirmed = false;
 
         const timerEl = document.getElementById('timer');
-        timerEl.innerText = "30";
+        timerEl.innerText = "60";
 
         const statusBox = document.getElementById('status-box');
         if (statusBox) statusBox.style.display = isDebugMode() ? '' : 'none';
@@ -511,7 +511,7 @@ async function showScreen(index, useFade = true) {
                     torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
                     shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
                     pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1)),
-                    legCrossSeconds: parseFloat((legCrossRatio * 30).toFixed(1))
+                    legCrossSeconds: parseFloat((legCrossRatio * 60).toFixed(1))
                 };
 
                 showScreen(5, true);
@@ -744,7 +744,7 @@ function resetToInitialSetup() {
     clearInterval(typingInterval);
     typingInterval = null;
 
-    timeLeft = 30;
+    timeLeft = 60;
     isPaused = true;
     sittingConfirmed = false;
     captureLoopStarted = false;

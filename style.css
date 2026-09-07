@@ -82,6 +82,10 @@ p {
     font-size: 1.3rem;
 }
 
+#screen-6 .help-text {
+    font-size: 1rem;
+}
+
 .btn {
     background-color: #1a73e8;
     color: #ffffff;
@@ -434,34 +438,41 @@ p {
 }
 
 #screen-6 {
-    padding: 24px 36px;
+    padding: 12px 36px 12px;
     box-sizing: border-box;
+    overflow-y: auto;
+    overflow-x: hidden;
+    justify-content: center;
 }
 
 .report-container {
     width: 100%;
-    height: 100%;
     max-width: 1600px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 14px;
 }
 
 .report-header {
+    flex: 0 0 auto;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    min-height: 64px;
 }
 
 .report-title-group {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 3px;
+    min-width: 0;
 }
 
-.report-title-hidden {
-    display: none;
+.report-title {
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: #202124;
 }
 
 .report-date {
@@ -473,68 +484,80 @@ p {
 .report-header-actions {
     display: flex;
     gap: 12px;
+    flex-shrink: 0;
 }
 
 .report-grid {
-    flex: 1;
+    width: 100%;
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    grid-template-rows: 1fr 1.2fr auto;
-    gap: 20px;
-    min-height: 0;
+    grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+    grid-template-rows: minmax(300px, auto) minmax(250px, auto);
+    grid-template-areas:
+        "metrics advice"
+        "bottom advice";
+    gap: 16px;
+    align-items: stretch;
 }
 
 .report-card {
     background: #ffffff;
     border: 1px solid #e0e0e0;
     border-radius: 18px;
-    padding: 24px 28px;
+    padding: 20px 24px;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
     overflow: hidden;
+    min-width: 0;
 }
 
 .report-card h2 {
-    font-size: 1.6rem;
+    font-size: 1.45rem;
     font-weight: 700;
     color: #3c4043;
-    margin-bottom: 16px;
+    margin: 0 0 14px;
+    flex: 0 0 auto;
 }
 
 .metrics-card {
-    grid-column: 1 / 3;
-    grid-row: 1 / 2;
-    justify-content: center;
-    min-height: 360px;
+    grid-area: metrics;
+    justify-content: flex-start;
+    min-height: 300px;
 }
 
 .metrics-list {
     display: flex;
     flex-direction: column;
-    justify-content: space-around;
-    height: 100%;
-    gap: 12px;
+    justify-content: space-between;
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
 }
 
 .metric-item {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
 }
 
 .metric-label {
     display: flex;
     justify-content: space-between;
-    font-size: 1.3rem;
+    gap: 12px;
+    font-size: 1.2rem;
     font-weight: 600;
     color: #3c4043;
 }
 
+.metric-label > span:first-child {
+    min-width: 0;
+}
+
 .metric-value {
-    font-size: 1.35rem;
+    font-size: 1.2rem;
     font-weight: 700;
+    white-space: nowrap;
 }
 
 .status-good { color: #137333; }
@@ -542,7 +565,8 @@ p {
 
 .progress-bar-bg {
     width: 100%;
-    height: 16px;
+    height: 14px;
+    flex: 0 0 14px;
     background-color: #f1f3f4;
     border-radius: 8px;
     overflow: hidden;
@@ -558,17 +582,30 @@ p {
 .fill-good { background-color: #34a853; }
 .fill-warning { background-color: #ea4335; }
 
+.score-photo-row {
+    grid-area: bottom;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    min-width: 0;
+}
+
+.score-card,
+.photo-card {
+    min-width: 0;
+    min-height: 250px;
+}
+
 .score-card {
-    grid-column: 1 / 2;
-    grid-row: 2 / 3;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
 }
 
 .score-circle-wrapper {
     position: relative;
-    width: clamp(170px, 24vh, 250px);
-    height: clamp(170px, 24vh, 250px);
+    width: min(180px, 70%);
+    height: min(180px, 70%);
+    flex: 0 0 auto;
 }
 
 .score-ring {
@@ -604,242 +641,303 @@ p {
 }
 
 .score-num {
-    font-size: 4.2rem;
+    font-size: 3.5rem;
     font-weight: 800;
     color: #1a73e8;
     line-height: 1;
 }
 
 .score-total {
-    font-size: 1.25rem;
+    font-size: 1.1rem;
     font-weight: 600;
     color: #70757a;
-    margin-top: 6px;
-}
-
-.action-card {
-    grid-column: 2 / 3;
-    grid-row: 2 / 3;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    background: #f8f9fa;
-}
-
-.print-icon {
-    width: 56px;
-    height: 56px;
-}
-
-.action-card .help-text {
-    text-align: center;
-}
-
-.advice-card {
-    grid-column: 3 / 4;
-    grid-row: 1 / 3;
-    justify-content: flex-start;
-    min-width: 40vw;
+    margin-top: 5px;
 }
 
 .photo-card {
-    grid-column: 1 / 4;
-    grid-row: 3 / 4;
-    flex-direction: row;
+    display: flex !important;
     align-items: center;
-    gap: 20px;
-}
-
-.photo-card h2 {
-    margin-bottom: 0;
-    white-space: nowrap;
+    justify-content: center;
+    text-align: center;
 }
 
 .worst-photo {
-    height: 140px;
+    display: block;
     width: auto;
-    border-radius: 12px;
-    object-fit: cover;
-    flex-shrink: 0;
+    max-width: 100%;
+    max-height: 170px;
+    object-fit: contain;
+    border-radius: 10px;
+    margin: 0 auto 6px;
 }
 
 .worst-photo-caption {
     color: #70757a;
+    font-size: 0.9rem;
+    text-align: center;
 }
 
+.advice-card {
+    grid-area: advice;
+    min-width: 0;
+    min-height: 0;
+    justify-content: flex-start;
+}
 
 .advice-content {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     background-color: #f8f9fa;
     border-radius: 14px;
-    padding: 20px;
-    font-size: 1.3rem;
+    padding: 18px;
+    font-size: 1.15rem;
     font-weight: 500;
     color: #202124;
-    line-height: 1.75;
+    line-height: 1.65;
     border: 1px solid #f1f3f4;
     display: block;
     white-space: pre-wrap;
     overflow-y: auto;
 }
 
+#screen-6 h1, #screen-6 h2, #screen-6 p {
+    margin-top: 0;
+}
+
 .report-footer {
+    display: none;
+    flex: 0 0 auto;
     text-align: center;
+    padding-bottom: 2px;
 }
 
 .report-footer p {
-    font-size: 1rem;
+    font-size: 0.9rem;
     text-align: center;
+}
+
+#screen-6 .report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#screen-6 .report-title {
+    margin: 0;
+}
+
+#screen-6 .print-btn,
+#screen-6 .no-print-btn {
+    position: static !important;
+    margin: 0 !important;
+    padding: 8px 16px;
+    cursor: pointer;
+}
+
+@media (max-width: 1100px) {
+    #screen-6 {
+        padding: 16px 20px 10px;
+    }
+
+    .report-grid {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "metrics"
+            "bottom"
+            "advice";
+    }
+
+    .advice-card {
+        min-height: 320px;
+    }
+}
+
+@media (max-width: 700px) {
+    .report-header {
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .report-title {
+        font-size: 1.5rem;
+    }
+
+    .report-header-actions {
+        gap: 6px;
+    }
+
+    .report-header-actions .btn {
+        padding: 9px 14px;
+        font-size: 0.9rem;
+    }
+
+    .score-photo-row {
+        grid-template-columns: 1fr;
+    }
+
+    .score-card,
+    .photo-card {
+        min-height: 230px;
+    }
 }
 
 @media print {
     @page {
-        size: A4;
-        margin: 14mm 16mm;
+        size: A4 portrait;
+        margin: 10mm 15mm;
     }
 
     html, body {
-        background: #ffffff !important;
-        width: auto;
-        height: auto;
+        width: 100% !important;
+        height: auto !important;
         overflow: visible !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+        font-size: 12pt;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
     }
 
-    #app {
-        position: static;
-        width: auto;
-        height: auto;
-    }
-
-    .screen {
+    .no-print,
+    .print-btn,
+    .no-print-btn,
+    .view-toggle-btn,
+    .shorts-nav,
+    .shorts-scroll-shield,
+    .setup-screen,
+    .animated-bg {
         display: none !important;
     }
 
-    #screen-6.active {
-        display: block !important;
+    .screen:not(#screen-6) {
+        display: none !important;
+    }
+
+    #screen-6 {
         position: static !important;
         opacity: 1 !important;
         visibility: visible !important;
-        width: auto !important;
-        height: auto !important;
         padding: 0 !important;
-    }
-
-    .no-print {
-        display: none !important;
-    }
-
-    * {
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-        box-shadow: none !important;
+        margin: 0 !important;
+        zoom: 1 !important;
+        display: block !important;
     }
 
     .report-container {
-        width: 100%;
-        height: auto;
-        max-width: 100%;
-        gap: 6mm;
+        max-width: 100% !important;
+        height: auto !important;
+        gap: 15px !important;
     }
 
     .report-header {
-        align-items: flex-start;
-        margin-bottom: 2mm;
+        margin-bottom: 10px;
+        border-bottom: 2px solid #202124;
+        padding-bottom: 8px;
     }
 
-    h1 {
-        font-size: 30px;
-        margin-bottom: 2mm;
-    }
-
-    .report-date {
-        font-size: 10pt;
+    .report-title {
+        font-size: 1.8rem !important;
     }
 
     .report-grid {
-        display: flex;
-        flex-direction: column;
-        gap: 6mm;
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        grid-template-rows: auto auto !important;
+        gap: 12px !important;
+        page-break-inside: avoid;
     }
 
     .report-card {
-        border: 1px solid #d5d8dc;
-        border-radius: 4mm;
-        padding: 6mm 7mm;
+        border: 1px solid #cccccc !important;
+        box-shadow: none !important;
+        padding: 16px !important;
+        border-radius: 12px !important;
         page-break-inside: avoid;
-        break-inside: avoid;
     }
 
     .report-card h2 {
-        font-size: 13pt;
-        margin-bottom: 4mm;
-    }
-
-    .score-card {
-        order: 1;
-        min-height: 0;
+        font-size: 1.2rem !important;
+        margin-bottom: 10px !important;
     }
 
     .metrics-card {
-        order: 2;
-        min-height: 0;
+        grid-column: 1 / 3 !important;
+        grid-row: 1 / 2 !important;
+        min-height: auto !important;
     }
 
-    .advice-card {
-        order: 3;
-        min-width: 0;
-    }
-
-    .photo-card {
-        order: 4;
-        flex-direction: row;
-        min-height: 0;
-    }
-
-    .score-circle-wrapper {
-        width: 46mm;
-        height: 46mm;
-    }
-
-    .score-num {
-        font-size: 22pt;
-    }
-
-    .score-total {
-        font-size: 9pt;
+    .metrics-list {
+        gap: 8px !important;
     }
 
     .metric-label {
-        font-size: 10.5pt;
+        font-size: 1rem !important;
     }
 
     .metric-value {
-        font-size: 10.5pt;
+        font-size: 1rem !important;
     }
 
     .progress-bar-bg {
-        height: 3mm;
+        height: 10px !important;
+        border: 1px solid #e0e0e0;
+    }
+
+    .score-photo-row {
+        display: flex !important;
+        grid-column: 1 / 2 !important;
+        grid-row: 2 / 3 !important;
+        flex-direction: column !important;
+        gap: 12px !important;
+    }
+
+    .score-card {
+        align-items: center !important;
+        padding: 12px !important;
+    }
+
+    .score-circle-wrapper {
+        width: 130px !important;
+        height: 130px !important;
+    }
+
+    .score-num {
+        font-size: 2.8rem !important;
+    }
+
+    .photo-card {
+        display: flex !important;
+        align-items: center !important;
+        text-align: center !important;
+    }
+
+    .worst-photo {
+        max-height: 180px !important;
+        width: auto !important;
+        border-radius: 8px;
+        margin-bottom: 6px;
+    }
+
+    .worst-photo-caption {
+        font-size: 0.9rem !important;
+    }
+
+    .advice-card {
+        grid-column: 2 / 3 !important;
+        grid-row: 2 / 3 !important;
+        min-width: auto !important;
     }
 
     .advice-content {
-        font-size: 10.5pt;
-        line-height: 1.6;
-        border: none;
-        background: #f8f9fa;
-        overflow: visible;
-        padding: 5mm;
-    }
-
-    .help-text {
-        font-size: 8.5pt;
+        font-size: 0.95rem !important;
+        line-height: 1.5 !important;
     }
 
     .report-footer {
-        margin-top: 4mm;
-        padding-top: 0;
-    }
-
-    .report-footer p {
-        font-size: 8pt;
+        display: block !important;
+        margin-top: 15px;
+        text-align: center;
+        font-size: 0.85rem;
+        color: #5f6368;
     }
 }

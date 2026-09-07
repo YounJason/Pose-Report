@@ -41,7 +41,7 @@
 
 ## 개요
 
-카메라 앞에서 30초간 자세를 측정해 거북목 · 등/허리 · 어깨 · 골반을 점수화하고,
+카메라 앞에서 60초간 자세를 측정해 거북목 · 등/허리 · 어깨 · 골반을 점수화하고,
 다리 꼬기는 별도의 기하학적 휴리스틱으로 감지합니다. 측정 결과는 Gemini API로 코칭
 피드백을 생성한 뒤, 화면에서 바로 A4 용지로 인쇄해 확인할 수 있습니다.
 
@@ -82,7 +82,7 @@
 | 1 | 카메라 로딩 |
 | 2 | 메인 화면 |
 | 3 | QR 개인정보 동의 |
-| 4 | 30초 측정 |
+| 4 | 60초 측정 |
 | 5 | 리포트 생성 |
 | 6 | 최종 리포트 (A4 인쇄) |
 
@@ -97,12 +97,12 @@
 
 - **카메라 로딩 완료 후 이동 경로**: 평소에는 카메라 로딩(index 1) 완료 시(`onCameraReady`
   콜백 또는 20초 타임아웃) `screen-2`(메인 화면)로 이동하지만, 디버그 모드에서는 QR 동의
-  (`screen-3`)를 건너뛰고 곧바로 `screen-4`(30초 측정 화면)로 이동합니다. 다른 진입 경로
+  (`screen-3`)를 건너뛰고 곧바로 `screen-4`(60초 측정 화면)로 이동합니다. 다른 진입 경로
   (`btn-start` → `screen-3` → 개인정보 동의 폴링 → `screen-4`)는 그대로입니다.
 - **`screen-4`에서의 동작**: `status-box`(참가자 화면에는 평소 `display: none`으로 숨겨진
   상태 텍스트 오버레이)가 보이도록 하고, `countdownInterval`의 tick 함수가 매 초 가장 먼저
   `isDebugMode()`를 확인해 참이면 그대로 반환해 `timeLeft`를 감소시키지 않습니다. 즉
-  타이머가 "30"에서 멈춘 채로 유지됩니다.
+  타이머가 "60"에서 멈춘 채로 유지됩니다.
 
 ### 파일 구조
 
@@ -512,12 +512,56 @@ Astra Pro 프레임 처리 루프(`run_debug_skeleton_viewer`)는 매 프레임�
 (`resetToInitialSetup()`)에서 함께 초기화됩니다.
 
 최종 리포트 화면(`screen-6`) 진입 시 `#worst-photo-card`(`index.html`의
-`.report-card.photo-card`)의 `<img id="report-worst-photo">`에 `worstScorePhotoSrc`를,
-캡션(`#report-worst-photo-caption`)에 `worstScoreValue`를 채웁니다. 측정 중 유효한
-점수를 한 번도 못 받았다면(`worstScorePhotoSrc`가 `null`) 카드 자체를
-`display: none`으로 숨기며, `.report-grid`의 3번째 행(`grid-template-rows`의 `auto`)이
-내용 없이 0 높이로 접혀 레이아웃에 빈 공간을 남기지 않습니다. 인쇄(`@media print`) 시에도
-`.photo-card`에 `order: 4`를 줘서 다른 카드들과 함께 세로 1열로 배치됩니다.
+독립된 `.report-card.photo-card`)의 `<img id="report-worst-photo">`에
+`worstScorePhotoSrc`를, 캡션(`#report-worst-photo-caption`)에 `worstScoreValue`를
+채웁니다. 측정 중 유효한 점수를 한 번도 못 받았다면(`worstScorePhotoSrc`가 `null`)
+`#worst-photo-card`에 인라인 `display: none`을 줘서 화면·인쇄 어느 쪽에서도 보이지
+않게 하고, 점수를 한 번이라도 받았다면 인라인 `style.display`를 빈 문자열로 되돌려
+CSS(아래 참고)가 화면/인쇄 여부를 결정하도록 둡니다.
+
+**화면에서는 항상 숨김, 인쇄할 때만 표시 — 종합 점수 카드 옆에 나란히**: `.photo-card`는
+기본 `display: none`이고, `@media print` 안에서만 표시됩니다. 화면에 보이는 사진이
+어색하다는 피드백에 따라, 화면에서는 사진 카드를 아예 렌더링하지 않고 인쇄된 리포트에서만
+보이도록 했습니다. 다만 사진은 (점수 카드에 병합하지 않고) 독립된 `.report-card`를
+유지하면서, 인쇄 시 종합 점수 카드 옆 빈 공간에 나란히 배치돼야 합니다. 이를 위해
+`index.html`에서 `.score-card`와 `.photo-card`를 `.score-photo-row`라는 wrapper로
+묶었습니다:
+
+- **화면**: `.score-photo-row { display: contents; }` — wrapper 자체를 박스 모델에서
+  지워서, 두 자식(`.score-card`, `.photo-card`)이 `.report-grid`의 **직속** grid item인
+  것처럼 배치되게 합니다. 그래서 `.score-card`의 기존 `grid-column: 1/2; grid-row: 2/3;`가
+  wrapper 유무와 무관하게 그대로 적용되고, 화면에서 항상 숨겨진 `.photo-card`는 애초에
+  안 보이니 배치가 문제되지 않습니다. 즉 화면 레이아웃은 사진 도입 이전과 완전히 동일합니다.
+- **인쇄**: `@media print`가 `.score-photo-row`를 `display: flex; flex-direction: row;`로
+  바꿔 실제 가로 배치 컨테이너로 되돌리고, 이 wrapper에 `order: 1`을 줘서(개별 카드가
+  아니라 wrapper 자체가) 인쇄 스택에서 첫 번째로 오게 합니다. `.score-card`는
+  `flex: 0 0 auto`(링 크기만큼만 차지)로, `.photo-card`는 `flex: 1`(남는 폭을 전부 사진이
+  채움)로 둬서 이전에 점수 링 옆에 남던 빈 공간을 사진이 자연스럽게 메꿉니다.
+
+**한 번씩 시도했다가 되돌린 것들**:
+- *점수 카드 안에 사진 합치기*: 처음에는 `.report-grid`에 3번째 행(`grid-template-rows`에
+  `auto` 추가)을 만들어 사진을 독립 카드로 넣었는데, 뷰포트 높이가 고정된
+  (`body { overflow: hidden }`) 화면에서 기존 2행 레이아웃이 가정하던 공간을 3행이
+  침범해 점수 링이 다른 카드와 겹치는 레이아웃 붕괴가 있었습니다. 이를 점수 카드
+  내부에 사진을 나란히 넣는 방식(`<img>`를 `.score-card`의 직계 자식으로)으로 한 차례
+  고쳤었지만, "독립된 카드여야 한다"는 요구사항과 맞지 않아 다시 분리했습니다.
+- *사진 카드에 직접 `order`/grid 배치 주기*: `.score-photo-row` wrapper 없이
+  `.photo-card`에만 `grid-column`/`grid-row`를 준 적도 있었는데, 화면에서 항상 숨어있는
+  카드에 화면용 grid 배치를 고민할 필요가 없다는 걸 깨닫고 `display: contents` wrapper로
+  단순화했습니다.
+
+**`.report-grid`의 행 높이는 `auto`가 아니라 `minmax(...)`로 고정합니다**: `.advice-card`(AI
+피드백)가 `grid-row: 1 / 3`으로 두 행에 걸쳐 배치되는데, 이런 "여러 행에 걸친 아이템 +
+`auto` 트랙" 조합은 브라우저가 남는 높이를 두 행에 분배하는 방식이 버전에 따라 달라질 수
+있는 취약한 구성입니다. 부스 운영 중 `.score-card`의 `<h2>종합 자세 점수</h2>` 제목 상단이
+일부 잘려 보이는 렌더링 문제가 보고되어(재현은 간헐적), 정확한 원인을 특정하지 못한 상태에서
+`grid-template-rows: auto auto`를 `minmax(300px, auto) minmax(250px, auto)`로 바꿔 각 행의
+최소 높이를 `.metrics-card`/`.score-card`·`.photo-card`의 `min-height`(각각 300px, 250px)와
+동일하게 못박아 두었습니다. 이렇게 하면 `.advice-card`의 콘텐츠 길이나 브라우저의 트랙 분배
+알고리즘과 무관하게 1행/2행이 각 카드의 콘텐츠가 필요로 하는 높이보다 줄어들 수 없습니다.
+같은 증상이 다시 보고되면 이 수정으로는 근본 원인이 아니었다는 뜻이므로, 문제가 재현되는
+브라우저/줌 배율/타이밍(리포트 화면 전환 직후인지, AI 피드백 타이핑 중인지 등)을 함께
+기록해두세요.
 
 ### 최종 리포트 인쇄
 
@@ -525,7 +569,38 @@ Astra Pro 프레임 처리 루프(`run_debug_skeleton_viewer`)는 매 프레임�
 바로 인쇄하는 방식으로 대체되었습니다. `screen-6`의 "리포트 인쇄하기" 버튼은
 `window.print()`를 호출하며, `style.css`의 `@media print` 규칙이 리포트 카드들을
 A4 한 페이지에 맞는 세로 1열 레이아웃으로 재배치합니다. 인쇄 시 숨겨야 하는 버튼 등의
-UI 요소에는 `no-print` 클래스를 붙여 관리합니다.
+UI 요소에는 `no-print` 클래스를 붙여 관리합니다. 반대로 `.photo-card`는 화면용
+`no-print`와 정반대로, 평소엔 숨겨져 있다가 인쇄할 때만 나타납니다(위 "최저 점수 순간
+사진" 참고).
+
+**`.report-footer`(동아리/부스 안내 문구)는 화면에서는 항상 숨김, 인쇄할 때만 표시**:
+`.report-footer`는 기본 `display: none`이고, `@media print`에서만 `display: block !important`로
+다시 보이게 합니다. `#screen-6`이 `justify-content: center`로 세로 중앙 정렬되므로, 화면에
+footer까지 같이 두면 다른 카드들의 세로 중앙 위치가 footer 높이만큼 위로 밀리는 문제가 있어
+화면에서는 아예 렌더링하지 않기로 했습니다.
+
+**`#screen-6`은 `.report-container`를 세로로도 가운데 정렬합니다**: `#screen-6`의
+`justify-content`를 `flex-start`에서 `center`로 바꿔, 콘텐츠 높이가 뷰포트보다 작을 때
+위쪽에 붙지 않고 화면 중앙에 오도록 했습니다. 콘텐츠가 뷰포트보다 커지면 `overflow-y: auto`가
+그대로 스크롤을 제공합니다.
+
+**`#screen-6` 안의 `.help-text`는 전부 `1rem`으로 통일**: 전역 `.help-text`는 `1.3rem`이고
+`.worst-photo-caption`은 별도로 `0.9rem`을 썼는데, 두 값 모두 리포트 화면 안에서는 크기가
+들쭉날쭉해 보여 `#screen-6 .help-text { font-size: 1rem; }`로 스코프를 좁혀 덮어썼습니다(id
+선택자라 `.worst-photo-caption`의 `0.9rem`보다 우선 적용됩니다). `.help-text`는 현재
+`index.html` 전체에서 이 두 곳(AI 피드백 안내 문구, 최저 점수 사진 캡션)에만 쓰이므로 다른
+화면에는 영향이 없습니다.
+
+**"리포트를 생성했습니다!" 제목(`.report-title`, `<h1>`)은 인쇄에는 나오지 않습니다**:
+`@media print`에서 `.report-title { display: none; }`으로 숨겨서, 화면에서만
+보이고 인쇄된 A4 용지에는 날짜(`.report-date`)만 남습니다.
+
+**A4 한 장에 맞추기 위한 여백/폰트 축소**: 카드 사이 간격(`.report-container`/
+`.report-grid`의 `gap`)을 6mm→4mm, 카드 내부 여백(`.report-card`의 `padding`)을
+6mm 7mm→5mm 6mm, 카드 제목 아래 여백을 4mm→3mm, 점수 링을 46mm→42mm로 각각
+줄였습니다. 다만 AI 피드백(`generate_llm_advice`)이 유독 길게 나오는 경우까지 항상
+1장에 들어간다고 보장하지는 않습니다 — 프롬프트가 "1문단 정도로 간결하게"를 요청하므로
+보통은 짧지만, 절대적인 강제(예: 글자 수 자르기)는 하지 않았습니다.
 
 ### 운영자 카메라 모니터링
 
@@ -564,7 +639,7 @@ CSS로 별도 반전을 적용합니다 — 이는 서버 로직과 무관한 �
 
 ## 유튜브 쇼츠 자동 재생
 
-`screen-4`(30초 측정 화면)에서 참가자의 시선을 끌기 위해 유튜브 쇼츠를 자동으로 순환
+`screen-4`(60초 측정 화면)에서 참가자의 시선을 끌기 위해 유튜브 쇼츠를 자동으로 순환
 재생합니다. 자세 분석 자체는 기존과 동일하게 실제 카메라(웹캠/Astra)로 서버에서 계속
 수행되며, 그 결과(점수/상태 텍스트)만 타이머·상태 오버레이에 반영됩니다.
 

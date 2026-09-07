@@ -26,7 +26,7 @@
             </div>
             <div class="form-group" id="cfg-cam-group" style="display:none;"><label>카메라 인덱스</label><input type="number" id="cfg-cam" value="0" step="1"></div>
             <div class="form-group" id="cfg-debug-cam-group"><label>Astra Pro 인덱스</label><input type="number" id="cfg-debug-cam" value="1" step="1"></div>
-            <div class="form-group form-group-checkbox"><label>카메라 좌우 반전</label><input type="checkbox" id="cfg-mirror" checked></div>
+            <div class="form-group form-group-checkbox"><label>카메라 좌우 반전</label><input type="checkbox" id="cfg-mirror"></div>
             <div class="form-group form-group-checkbox"><label>디버그 모드</label><input type="checkbox" id="cfg-debug-mode"></div>
             <button id="btn-save" class="save-btn">설정 완료</button>
         </div>
@@ -87,11 +87,12 @@
             <div class="report-container">
                 <header class="report-header">
                     <div class="report-title-group">
-                        <h1 class="report-title-hidden">리포트를 생성했습니다!</h1>
+                        <h1 class="report-title">리포트를 생성했습니다!</h1>
                         <p class="report-date" id="report-date"></p>
                     </div>
                     <div class="report-header-actions no-print">
-                        <button class="btn" id="btn-restart">처음으로 돌아가기</button>
+                        <button class="btn" id="btn-print">인쇄하기</button>
+                        <button class="btn" id="btn-restart">돌아가기</button>
                     </div>
                 </header>
 
@@ -141,34 +142,25 @@
                         </div>
                     </div>
 
-                    <div class="report-card score-card">
-                        <h2>종합 자세 점수</h2>
-                        <div class="score-circle-wrapper">
-                            <svg class="score-ring" viewBox="0 0 120 120">
-                                <circle class="ring-bg" cx="60" cy="60" r="50"></circle>
-                                <circle class="ring-progress" id="score-ring-progress" cx="60" cy="60" r="50"></circle>
-                            </svg>
-                            <div class="score-text">
-                                <span class="score-num" id="report-score">0</span>
-                                <span class="score-total">/ 100</span>
+                    <div class="score-photo-row">
+                        <div class="report-card score-card">
+                            <h2>종합 자세 점수</h2>
+                            <div class="score-circle-wrapper">
+                                <svg class="score-ring" viewBox="0 0 120 120">
+                                    <circle class="ring-bg" cx="60" cy="60" r="50"></circle>
+                                    <circle class="ring-progress" id="score-ring-progress" cx="60" cy="60" r="50"></circle>
+                                </svg>
+                                <div class="score-text">
+                                    <span class="score-num" id="report-score">0</span>
+                                    <span class="score-total">/ 100</span>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <div class="report-card action-card no-print">
-                        <svg class="print-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M6 9V2H18V9" stroke="#1a73e8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M6 18H4C3.44772 18 3 17.5523 3 17V11C3 10.4477 3.44772 10 4 10H20C20.5523 10 21 10.4477 21 11V17C21 17.5523 20.5523 18 20 18H18" stroke="#1a73e8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                            <rect x="6" y="14" width="12" height="8" stroke="#1a73e8" stroke-width="1.6" stroke-linejoin="round"/>
-                        </svg>
-                        <p class="help-text">리포트를 A4 용지로 인쇄해서 받아보실 수 있습니다.</p>
-                        <button class="btn" id="btn-print">리포트 인쇄하기</button>
-                    </div>
-
-                    <div class="report-card photo-card" id="worst-photo-card">
-                        <h2>자세가 가장 흐트러졌던 순간</h2>
-                        <img class="worst-photo" id="report-worst-photo" alt="측정 중 점수가 가장 낮았던 순간의 사진">
-                        <p class="help-text worst-photo-caption" id="report-worst-photo-caption"></p>
+                        <div class="report-card photo-card" id="worst-photo-card">
+                            <img class="worst-photo" id="report-worst-photo">
+                            <p class="help-text worst-photo-caption" id="report-worst-photo-caption"></p>
+                        </div>
                     </div>
 
                     <div class="report-card advice-card">

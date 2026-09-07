@@ -1639,14 +1639,14 @@ class CameraApp:
 
         prompt = f"""
         당신은 자세 교정 전문 AI 트레이너입니다.
-        사용자의 30초간 측정한 자세 데이터는 다음과 같습니다.
+        사용자의 60초간 측정한 자세 데이터는 다음과 같습니다.
 
         - 종합 자세 점수: {metrics.get('score')}점 / 100점
         - 거북목 안정도 점수: {metrics.get('turtle')}점 / 100점
         - 등/허리 안정도 점수: {metrics.get('torso')}점 / 100점
         - 어깨 균형 점수: {metrics.get('shoulder')}점 / 100점
         - 골반 균형 점수: {metrics.get('pelvis')}점 / 100점
-        - 다리 꼬기 지속 시간: 측정 30초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
+        - 다리 꼬기 지속 시간: 측정 60초 중 약 {metrics.get('legCrossSeconds', 0)}초 동안 다리를 꼰 상태였습니다.
 
         위 점수를 바탕으로 사용자의 자세 습관과 우선적으로 개선할 부분, 추천하는 행동을 조언하세요.
         답변은 읽기 쉽게 1문단 정도로 간결하게 한국어로 작성하세요.
