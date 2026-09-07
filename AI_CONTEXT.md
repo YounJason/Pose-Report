@@ -52,7 +52,7 @@
 ### 주요 기능
 
 - **실시간 자세 분석**: MediaPipe Pose로 신체 랜드마크를 추출해 프레임마다 자세를 채점
-- **각도 threshold 기반 판정**: 목/머리, 등/허리, 어깨, 골반 각각에 대해 각도 threshold로 정상/위험을 판정
+- **각도/비율 threshold 기반 판정**: 목, 어깨, 골반은 각도 threshold로, 등/허리는 어깨너비 대 골반너비 비율로 정상/위험을 판정
 - **RULA 참고 가중 종합점수**: 프로젝트용 heuristic weighting으로 목 25 / 몸통 30 / 어깨 30 / 골반 15를 기본값으로 사용
 - **다리 꼬기 휴리스틱**: 기존 선분 교차 기반 판정을 종합점수에 별도 감점으로 반영
 - **Astra Pro 지원**: RGB + Depth / 3D skeleton 경로를 지원하며, 유효한 3D 좌표가 있으면 각도 계산에 3D 좌표를 사용
@@ -109,7 +109,7 @@
 ```text
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
-├── config.py             # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록 기본값
+├── config.py             # 각도/비율 threshold / 종합 점수 가중치 / 신뢰 채널 목록 기본값
 ├── load_shorts.py        # 신뢰 채널의 쇼츠를 조회해 shorts_pool.json을 생성/갱신 (main.py와 별도 프로세스로 실행)
 ├── run.bat               # main.py 워치독 (Windows 전용, 예기치 않은 종료 시 자동 재시작)
 ├── index.html            # SPA 메인 화면 (screen 0~6)
@@ -296,92 +296,115 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
 
 ```text
 neck     → TURTLE_NECK_ANGLE_THRESHOLD, HEAD_TILT_ANGLE_THRESHOLD
-torso    → TORSO_ANGLE_THRESHOLD, SPINE_LEAN_ANGLE_THRESHOLD
+torso    → TORSO_ROUND_RATIO_THRESHOLD, TORSO_BACK_RISK_RATIO_THRESHOLD, SPINE_LEAN_ANGLE_THRESHOLD
 shoulder → SHOULDER_ANGLE_THRESHOLD
 pelvis   → PELVIS_ANGLE_THRESHOLD
 ```
 
-### 등이 앞으로 굽음 vs 뒤로 젖혀짐 구분
+torso를 제외한 나머지는 `CameraApp._threshold_quality`(각도-threshold 차이를 0~100 점수로
+선형 변환, 정상 90~100 / 문제 0~89)를 그대로 씁니다. torso는 아래처럼 어깨/골반 너비
+비율로 판정합니다.
 
-`torso_angle`은 계산 과정에서 `abs(dz_torso)`(2D)/`abs(torso_vec[2])`(3D)를 쓰기 때문에
-앞으로 숙이든(굽음) 뒤로 젖히든(엉덩이를 앞으로 내밀고 등받이에서 등을 뗀 채 상체만 뒤로
-기울이는 자세 등) 각도 크기 자체는 동일하게 threshold 판정에 들어갑니다(점수 계산 로직은
-변경하지 않았습니다). 다만 어느 쪽으로 굽었는지 상태 메시지로 구분하기 위해
-`_score_from_angles`에 부호가 있는 `torso_lean_sign` 인자를 추가했습니다: 2D 경로는
-`dz_torso`(부호 있는 hip.z − shoulder.z 원본 값, `abs()` 적용 전), 3D 경로는
-`torso_vec[2]`(부호 있는 hip − shoulder의 z 성분)를 그대로 전달합니다. `torso_lean_sign`이
-음수면 "등 뒤로 젖혀짐 위험", 그 외(기본값 포함)에는 기존과 동일한 "등 굽음 위험" 메시지를
-씁니다. MediaPipe 기준으로 (몸을 앞으로 숙여) 어깨가 카메라에 가까워지면 `dz_torso`가
-양수가 되도록 좌표 부호를 확인해서 맞췄으며, Astra 3D 경로도 "카메라에 가까울수록
-z가 작다"는 동일한 부호 관례를 따른다고 가정했습니다 — 실제 Astra 장비로 뒤로 젖히는
-동작을 테스트해 메시지가 반대로 나오면 `torso_lean_sign=torso_vec[2]` 앞에 마이너스를
-붙여 부호를 뒤집으면 됩니다.
+### 등 굽음 / 허리 위험 판정 (어깨·골반 너비 비율)
 
-**시도했다가 되돌린 것 — 어깨너비 대비 세로거리 비율 방식**: `dz_torso` 기반
-`torso_angle`은 카메라가 위에서 아래를 보는 구조상 똑바로 앉아도 이미 크게 나와
-(baseline bias), `CAMERA_TILT_ANGLE_DEG`로 정확히 보정하지 않으면 등 굽음이 잘 안 잡히는
-문제가 있었습니다. 한 사람을 대상으로 촬영한 사진 5장(정상 1장, 뒤로 젖힘 2장, 앞으로
-굽음 2장)에서는 (어깨-엉덩이 세로거리 ÷ 어깨너비) 비율이 z보다 훨씬 뚜렷한 신호를 내
-`TORSO_UPRIGHT_RATIO` 기준값과 margin으로 방향까지 판정하도록 바꿔봤지만, 실제 운영
-중인 웹캠 파이프라인에서 테스트하자 "등 굽음"이 전혀 뜨지 않는 문제가 발생했습니다. 그
-사진들이 실제 앱이 쓰는 `cv2.VideoCapture` 프레임과 다른 경로(별도 카메라 앱 등)로
-촬영됐을 가능성이 있어 캘리브레이션이 실제 파이프라인과 안 맞았을 것으로 추정되지만,
-확실히 검증하지 못한 채로 이 접근 자체를 되돌렸습니다. 관련 흔적(`config.py`의
-`TORSO_UPRIGHT_RATIO`/`TORSO_RATIO_*`, `_score_from_angles`의 `torso_ratio` 인자,
-`_analyze_pose`의 `shoulder_width_px`/`torso_ratio` 계산, `CameraApp.calibrate_torso_upright`
-메서드)는 전부 제거했습니다. 이 방향을 다시 시도한다면, 사진이 아니라 **실제 운영
-중인 파이프라인에서 실시간으로 뽑은 값**으로 캘리브레이션해야 합니다.
+`torso_angle`(랜드마크의 세로-깊이 성분으로 재는 수직 기울기) 대신, 양 어깨 사이 거리와
+양 골반 사이 거리의 비율 `torso_ratio = shoulder_width / hip_width`로 판정합니다. 직립
+자세에서는 보통 어깨너비가 골반너비보다 넓어 `torso_ratio`가 1보다 크게 나오는데, 등이
+앞으로 굽으면 이 비율이 더 커지고, 등받이에서 등을 떼고 뒤로 젖히거나 허리가 무너지는
+자세에서는 반대로 비율이 1 이하로 떨어지는 경향을 이용합니다.
+
+- **2D 웹캠 경로**(`_analyze_pose`): `shoulder_width = hypot(ls_x-rs_x, ls_y-rs_y)`,
+  `hip_width = hypot(lh_x-rh_x, lh_y-rh_y)`(모두 픽셀 좌표)로 계산합니다.
+- **3D Astra 경로**(`_analyze_pose_3d`): `np.linalg.norm(ls3d-rs3d)`,
+  `np.linalg.norm(lh3d-rh3d)`(실측 3D 좌표)로 계산합니다.
+- 두 경로 모두 `hip_width`가 0에 가까우면(랜드마크가 겹쳐 보이는 등) 0으로 나누는 것을
+  피하려고 `torso_ratio`를 그냥 `1.0`(정상)으로 둡니다.
+
+`CameraApp._torso_ratio_quality(ratio, round_threshold, back_risk_threshold)`가 판정을
+담당합니다.
+
+- `ratio >= TORSO_ROUND_RATIO_THRESHOLD`(기본 `1.4`) → "등 굽음 위험". `1.4`에서 89점,
+  `1.8` 이상이면 0점이 되도록 선형으로 감점합니다(감점 구간 폭 `0.4`는 코드에 하드코딩).
+- `ratio <= TORSO_BACK_RISK_RATIO_THRESHOLD`(기본 `1.0`) → "허리 위험". `1.0`에서 89점,
+  `0.7` 이하면 0점이 되도록 선형으로 감점합니다(감점 구간 폭 `0.3`은 코드에 하드코딩).
+- 그 사이(`1.0` 초과 ~ `1.4` 미만)면 100점, 위험 아님.
+- 두 threshold(`TORSO_ROUND_RATIO_THRESHOLD`, `TORSO_BACK_RISK_RATIO_THRESHOLD`)만
+  `config.py`에서 조정 가능하고, 점수가 0에 도달하는 지점(`1.8`배 / `0.7`배)은 이
+  threshold와의 간격(`0.4` / `0.3`)으로 `_torso_ratio_quality` 코드에 고정돼 있습니다.
+  더 뾰족하거나 완만한 감점 곡선을 원하면 이 리터럴을 직접 수정하세요.
+
+기존에 "상체 불균형"으로 표시되던 좌우 기울기 판정(`spine_lean_angle`,
+`SPINE_LEAN_ANGLE_THRESHOLD`)은 이번 변경과 무관한 별도 축이라 그대로 유지했습니다.
+`q_torso = min(등/허리 비율 점수, 상체 불균형 점수)`로 여전히 두 값 중 더 낮은 쪽을
+`torso` metric 점수로 사용합니다.
+
+**이전 방식(수직 기울기 각도 `torso_angle`/`TORSO_ANGLE_THRESHOLD`/`torso_lean_sign`)은
+완전히 대체되어 제거했습니다.** 예전에는 어깨-골반의 세로(y)-깊이(z) 성분으로 수직 대비
+기울기 각도를 재고, 그 부호(`torso_lean_sign`)로 "등 굽음"과 "등 뒤로 젖혀짐"을
+구분했습니다. `CAMERA_TILT_ANGLE_DEG`로 카메라 설치 각도를 보정해야 했고, 2D 픽셀
+스케일 불일치 버그(아래 "옛 기록" 참고)도 있었습니다. 새 비율 방식은 카메라의 상하
+기울기와 원리상 거의 무관해서(어깨/골반 사이 "폭"은 카메라가 위·아래 어느 각도로
+내려다보든 크게 왜곡되지 않음) `CAMERA_TILT_ANGLE_DEG` 보정이 필요 없습니다. 이 값은
+이제 `neck_angle` 보정에만 쓰입니다.
+
+**(옛 기록) 시도했다가 되돌린 것 — 어깨너비 대비 세로거리 비율 방식**: 위 각도 방식을
+쓰던 시절, 같은 문제(카메라 tilt로 인한 baseline bias)를 어깨-엉덩이 세로거리 ÷
+어깨너비 비율로 풀어보려 한 적이 있습니다. 사진 5장으로는 신호가 뚜렷했지만 실제 운영
+중인 웹캠 파이프라인에서는 "등 굽음"이 전혀 뜨지 않아 되돌렸습니다(관련 흔적:
+`TORSO_UPRIGHT_RATIO`/`TORSO_RATIO_*`, `calibrate_torso_upright` 등, 전부 제거됨).
+지금의 "어깨너비 ÷ 골반너비" 비율은 이것과는 다른 지표(세로거리가 아니라 좌우 폭끼리
+비교)라 같은 실패를 반복할지는 실제 부스 운영 중 계속 지켜봐야 합니다.
 
 리포트의 4개 metric(`neck_score`, `torso_score`, `shoulder_score`, `pelvis_score`)은
 이 점수를 프레임별로 수집한 뒤 평균냅니다.
 
-**2D 웹캠 경로의 `neck_angle`/`torso_angle`는 y와 z를 반드시 픽셀 단위로 맞춰 계산해야
-합니다**: MediaPipe의 `landmark.z`는 "x와 같은 스케일"(이미지 가로폭 기준 정규화)인 반면
+**2D 웹캠 경로의 `neck_angle`는 y와 z를 반드시 픽셀 단위로 맞춰 계산해야 합니다**:
+MediaPipe의 `landmark.z`는 "x와 같은 스케일"(이미지 가로폭 기준 정규화)인 반면
 `landmark.y`는 세로높이 기준 정규화라, 두 값을 픽셀로 변환하지 않고 그대로
 `atan2(dz, dy)`에 넣으면 가로세로 비율(예: 16:9 → 약 1.78배)만큼 z(깊이) 성분이
-축소되어 실제보다 훨씬 작은 각도가 나옵니다. 그 결과 등을 눈에 띄게 굽혀도 계산된
-`torso_angle`이 `TORSO_ANGLE_THRESHOLD`(28도)를 넘지 못해 "등 굽음 위험"이 거의
-감지되지 않는 문제가 있었습니다. `_analyze_pose`(`main.py`)의 `dy`/`dz`(neck),
-`dy_torso`/`dz_torso`(torso)는 모두 `* h` 또는 `* w`로 픽셀 스케일로 변환한 뒤
-`atan2`에 넣도록 수정되었습니다(`shoulder_angle`/`spine_lean_angle`은 애초에 `ls_x`,
-`ls_y` 등 픽셀 변환된 변수만 사용해 이 문제가 없었습니다). 3D Astra 경로
-(`_analyze_pose_3d`)는 depth 센서가 주는 실측 3D 좌표(x/y/z가 이미 동일한 물리 단위)를
-쓰므로 이 스케일 불일치가 애초에 없습니다.
+축소되어 실제보다 훨씬 작은 각도가 나옵니다. `_analyze_pose`(`main.py`)의 `dy`/`dz`는
+모두 `* h` 또는 `* w`로 픽셀 스케일로 변환한 뒤 `atan2`에 넣도록 되어 있습니다
+(`shoulder_angle`/`spine_lean_angle`은 애초에 `ls_x`, `ls_y` 등 픽셀 변환된 변수만
+사용해 이 문제가 없었고, `torso`는 이제 각도가 아니라 어깨/골반 너비 비율로 계산하므로
+이 스케일 문제 자체가 해당되지 않습니다). 3D Astra 경로(`_analyze_pose_3d`)는 depth
+센서가 주는 실측 3D 좌표(x/y/z가 이미 동일한 물리 단위)를 쓰므로 이 스케일 불일치가
+애초에 없습니다.
 
-이 수정으로 같은 실제 자세에 대해 계산되는 `neck_angle`/`torso_angle` 값 자체가
-이전보다 커집니다(대략 `w/h` 배수만큼). 따라서 `TORSO_ANGLE_THRESHOLD`,
-`TURTLE_NECK_ANGLE_THRESHOLD` 등 기존에 버그가 있는 값 기준으로 맞춰뒀던 threshold는
-실측 각도로 다시 테스트하며 재조정이 필요할 수 있습니다.
+이 수정으로 같은 실제 자세에 대해 계산되는 `neck_angle` 값 자체가 이전보다 커집니다
+(대략 `w/h` 배수만큼). 따라서 `TURTLE_NECK_ANGLE_THRESHOLD` 등 기존에 버그가 있던 값
+기준으로 맞춰뒀던 threshold는 실측 각도로 다시 테스트하며 재조정이 필요할 수 있습니다.
 
-**각도 threshold/가중치 기본값은 `config.py`가 유일한 소스입니다**: 각도 threshold와
-종합 점수 가중치를 `config.py`에 모아두었고, `CameraApp.__init__`과 `setup_and_start()`의
-기본 인자값이 이 값을 그대로 가져다 씁니다. `index.html`의 초기 설정 화면(`screen-1`)에는
-더 이상 각도/가중치 입력 필드가 없으며, "설정 완료" 버튼은 카메라 소스/인덱스만 body에
-실어 `POST /api/setup_and_start`를 호출합니다(`api_setup_and_start`는 `camera_idx`,
-`camera_source`, `debug_cam_idx`만 body에서 읽습니다). 각도/가중치를 바꾸려면 서버를
-재시작하기 전에 `config.py`를 수정하세요. 카메라 소스(`카메라 소스` select)와 웹캠/Astra
-장치 인덱스는 여전히 `index.html` 설정 화면에서 매 실행마다 고를 수 있습니다.
+**각도/비율 threshold·가중치 기본값은 `config.py`가 유일한 소스입니다**: 각도/비율
+threshold와 종합 점수 가중치를 `config.py`에 모아두었고, `CameraApp.__init__`과
+`setup_and_start()`의 기본 인자값이 이 값을 그대로 가져다 씁니다. `index.html`의 초기
+설정 화면(`screen-1`)에는 더 이상 각도/가중치 입력 필드가 없으며, "설정 완료" 버튼은
+카메라 소스/인덱스만 body에 실어 `POST /api/setup_and_start`를 호출합니다
+(`api_setup_and_start`는 `camera_idx`, `camera_source`, `debug_cam_idx`만 body에서
+읽습니다). threshold/가중치를 바꾸려면 서버를 재시작하기 전에 `config.py`를
+수정하세요. 카메라 소스(`카메라 소스` select)와 웹캠/Astra 장치 인덱스는 여전히
+`index.html` 설정 화면에서 매 실행마다 고를 수 있습니다.
 
 ### 카메라 설치 기울기 보정 (`CAMERA_TILT_ANGLE_DEG`)
 
 TV 위 등 카메라를 얼굴보다 높은 위치에 달아 아래를 내려다보게(pitch) 설치하면, `neck_angle`
-(거북목)과 `torso_angle`(등/허리) 계산이 실제 자세와 무관하게 카메라가 아래를 보는
-각도만큼 체계적으로 틀어집니다. 이 두 각도는 랜드마크의 세로(y)-깊이(z) 성분으로
-전방 기울기를 재기 때문에, 카메라 자체의 상하 기울기가 곧바로 편향(bias)으로 섞여
-들어갑니다.
+(거북목) 계산이 실제 자세와 무관하게 카메라가 아래를 보는 각도만큼 체계적으로 틀어집니다.
+이 각도는 랜드마크의 세로(y)-깊이(z) 성분으로 전방 기울기를 재기 때문에, 카메라 자체의
+상하 기울기가 곧바로 편향(bias)으로 섞여 들어갑니다. (`torso`는 이제 각도가 아니라
+어깨/골반 너비 비율로 계산하므로 이 보정 대상이 아닙니다 — 위
+[등 굽음 / 허리 위험 판정](#등-굽음--허리-위험-판정-어깨골반-너비-비율) 참고.)
 
 - `shoulder_angle`/`pelvis_angle`(좌우 y 차이로 재는 롤 성향)과 `head_tilt_angle`,
-  `spine_lean_angle`(좌우 x-y 성향)은 카메라의 상하 기울기(피치)와 원리상 거의 무관해
+  `spine_lean_angle`(좌우 x-y 성향)도 카메라의 상하 기울기(피치)와 원리상 거의 무관해
   보정 대상에서 제외했습니다.
 - `config.CAMERA_TILT_ANGLE_DEG`(기본값 `0.0`)에 카메라가 아래로 기울어진 각도(도)를
   넣으면, `_analyze_pose`/`_analyze_pose_3d`(2D 웹캠 경로와 3D Astra 경로 모두)에서
-  계산 직후 `neck_angle -= CAMERA_TILT_ANGLE_DEG`, `torso_angle -= CAMERA_TILT_ANGLE_DEG`로
-  빼서 보정합니다. `CameraApp.__init__`이 `config.py` 값을 기본으로 로드하고,
-  `setup_and_start()`도 `camera_tilt` 인자(기본값 `config.CAMERA_TILT_ANGLE_DEG`)로
-  받아 `self.CAMERA_TILT_ANGLE_DEG`를 덮어씁니다(단, 다른 각도 threshold와 마찬가지로
-  현재 프런트엔드에는 이 값을 입력하는 필드가 없으므로 실제로는 `config.py`의 값을
-  그대로 씁니다). 값을 바꾸려면 서버를 재시작하기 전에 `config.py`의
-  `CAMERA_TILT_ANGLE_DEG`를 설치 각도에 맞게 조정하세요.
+  계산 직후 `neck_angle -= CAMERA_TILT_ANGLE_DEG`로 빼서 보정합니다.
+  `CameraApp.__init__`이 `config.py` 값을 기본으로 로드하고, `setup_and_start()`도
+  `camera_tilt` 인자(기본값 `config.CAMERA_TILT_ANGLE_DEG`)로 받아
+  `self.CAMERA_TILT_ANGLE_DEG`를 덮어씁니다(단, 다른 threshold와 마찬가지로 현재
+  프런트엔드에는 이 값을 입력하는 필드가 없으므로 실제로는 `config.py`의 값을 그대로
+  씁니다). 값을 바꾸려면 서버를 재시작하기 전에 `config.py`의 `CAMERA_TILT_ANGLE_DEG`를
+  설치 각도에 맞게 조정하세요.
 - 정밀한 광학적 보정이 아니라 소폭의 오차를 상쇄하기 위한 heuristic 보정이므로, 실제
   설치 각도와 정확히 일치하지 않아도 되고 현장에서 측정값을 보며 미세 조정하는 것을
   권장합니다.

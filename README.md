@@ -18,7 +18,7 @@
 Pose-Report/
 ├── main.py               # Flask 서버 실행 + Astra Pro 캘리브레이션 서브커맨드 포함
 ├── load_shorts.py        # 신뢰 채널의 쇼츠를 조회해 shorts_pool.json을 생성/갱신 (서버와 별도로 수동 실행)
-├── config.py             # 각도 threshold / 종합 점수 가중치 / 신뢰 채널 목록
+├── config.py             # 각도/비율 threshold / 종합 점수 가중치 / 신뢰 채널 목록
 ├── index.html            # SPA 메인 화면 (screen 0~6)
 ├── frontend.html         # 개인정보 수집·이용 동의 안내 페이지 (정적 파일로 서빙)
 ├── script.js
