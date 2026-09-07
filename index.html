@@ -26,7 +26,8 @@
             </div>
             <div class="form-group" id="cfg-cam-group" style="display:none;"><label>카메라 인덱스</label><input type="number" id="cfg-cam" value="0" step="1"></div>
             <div class="form-group" id="cfg-debug-cam-group"><label>Astra Pro 인덱스</label><input type="number" id="cfg-debug-cam" value="1" step="1"></div>
-            <div class="form-group form-group-checkbox"><label>카메라 좌우 반전</label><input type="checkbox" id="cfg-mirror"></div>
+            <div class="form-group form-group-checkbox"><label>카메라 좌우 반전</label><input type="checkbox" id="cfg-mirror" checked></div>
+            <div class="form-group form-group-checkbox"><label>디버그 모드</label><input type="checkbox" id="cfg-debug-mode"></div>
             <button id="btn-save" class="save-btn">설정 완료</button>
         </div>
 
@@ -71,9 +72,6 @@
                     <button type="button" class="view-toggle-btn" id="btn-toggle-view">카메라 화면 보기</button>
                     <div class="timer-badge" id="timer">60</div>
                     <div class="status-overlay status-unknown" id="status-box" style="display: none;">인식되지 않음</div>
-                    <div class="precountdown-overlay" id="precountdown-overlay">
-                        <span id="precountdown-number">3</span>
-                    </div>
                 </div>
             </div>
         </div>
@@ -165,6 +163,12 @@
                         </svg>
                         <p class="help-text">리포트를 A4 용지로 인쇄해서 받아보실 수 있습니다.</p>
                         <button class="btn" id="btn-print">리포트 인쇄하기</button>
+                    </div>
+
+                    <div class="report-card photo-card" id="worst-photo-card">
+                        <h2>자세가 가장 흐트러졌던 순간</h2>
+                        <img class="worst-photo" id="report-worst-photo" alt="측정 중 점수가 가장 낮았던 순간의 사진">
+                        <p class="help-text worst-photo-caption" id="report-worst-photo-caption"></p>
                     </div>
 
                     <div class="report-card advice-card">

@@ -403,46 +403,6 @@ p {
     letter-spacing: 0.5px;
 }
 
-.precountdown-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    background-color: rgba(32, 33, 36, 0.55);
-    z-index: 3;
-}
-
-.precountdown-overlay.active {
-    display: flex;
-}
-
-#precountdown-number {
-    color: #ffffff;
-    font-size: 8rem;
-    font-weight: 700;
-    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-    animation: precountdown-pop 1s ease-in-out;
-}
-
-@keyframes precountdown-pop {
-    0% {
-        transform: scale(0.5);
-        opacity: 0;
-    }
-    30% {
-        transform: scale(1.15);
-        opacity: 1;
-    }
-    100% {
-        transform: scale(1);
-        opacity: 1;
-    }
-}
-
 .loading-card {
     display: flex;
     flex-direction: column;
@@ -519,7 +479,7 @@ p {
     flex: 1;
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
-    grid-template-rows: 1fr 1.2fr;
+    grid-template-rows: 1fr 1.2fr auto;
     gap: 20px;
     min-height: 0;
 }
@@ -682,6 +642,32 @@ p {
     min-width: 40vw;
 }
 
+.photo-card {
+    grid-column: 1 / 4;
+    grid-row: 3 / 4;
+    flex-direction: row;
+    align-items: center;
+    gap: 20px;
+}
+
+.photo-card h2 {
+    margin-bottom: 0;
+    white-space: nowrap;
+}
+
+.worst-photo {
+    height: 140px;
+    width: auto;
+    border-radius: 12px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.worst-photo-caption {
+    color: #70757a;
+}
+
+
 .advice-content {
     flex: 1;
     background-color: #f8f9fa;
@@ -692,9 +678,7 @@ p {
     color: #202124;
     line-height: 1.75;
     border: 1px solid #f1f3f4;
-    display: flex;
-    align-items: flex-start;
-    justify-content: flex-start;
+    display: block;
     white-space: pre-wrap;
     overflow-y: auto;
 }
@@ -804,6 +788,12 @@ p {
     .advice-card {
         order: 3;
         min-width: 0;
+    }
+
+    .photo-card {
+        order: 4;
+        flex-direction: row;
+        min-height: 0;
     }
 
     .score-circle-wrapper {

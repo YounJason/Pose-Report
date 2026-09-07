@@ -86,6 +86,24 @@
 | 5 | 리포트 생성 |
 | 6 | 최종 리포트 (A4 인쇄) |
 
+### 디버그 모드 (`cfg-debug-mode`)
+
+초기 설정 화면(`screen-1`)의 "디버그 모드" 체크박스(`cfg-debug-mode`)는 `isDebugMode()`
+(`script.js`)로 어디서든 조회합니다. 별도의 상태 변수 없이 체크박스 값을 그때그때
+직접 읽는 방식이라, 측정 도중에 체크박스 값을 바꿔도(예: `screen-4`에서 개발자 도구로)
+즉시 반영됩니다.
+
+일반 모드와 다른 점 두 가지:
+
+- **카메라 로딩 완료 후 이동 경로**: 평소에는 카메라 로딩(index 1) 완료 시(`onCameraReady`
+  콜백 또는 20초 타임아웃) `screen-2`(메인 화면)로 이동하지만, 디버그 모드에서는 QR 동의
+  (`screen-3`)를 건너뛰고 곧바로 `screen-4`(30초 측정 화면)로 이동합니다. 다른 진입 경로
+  (`btn-start` → `screen-3` → 개인정보 동의 폴링 → `screen-4`)는 그대로입니다.
+- **`screen-4`에서의 동작**: `status-box`(참가자 화면에는 평소 `display: none`으로 숨겨진
+  상태 텍스트 오버레이)가 보이도록 하고, `countdownInterval`의 tick 함수가 매 초 가장 먼저
+  `isDebugMode()`를 확인해 참이면 그대로 반환해 `timeLeft`를 감소시키지 않습니다. 즉
+  타이머가 "30"에서 멈춘 채로 유지됩니다.
+
 ### 파일 구조
 
 ```text
@@ -204,8 +222,7 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
     운영자 단축키 Ctrl+↑(`resetToInitialSetup()`)에서 사용
   - `GET /api/supabase_key` — Supabase anon key 조회 (`CameraApp.get_supabase_key`)
   - `POST /api/generate_llm_advice` — 측정 결과로 Gemini 코칭 피드백 생성 (`CameraApp.generate_llm_advice`)
-  - `GET /api/next_short` — 쇼츠 pool에서 다음 영상 ID 하나 조회 (`ShortsPoolManager.next_video_id`)
-- **Python → JS**: `GET /api/events`로 여는 SSE(Server-Sent Events) 스트림 하나.
+  - `GET /api/next_short` — 쇼츠 pool에서 다음 영상 ID 하나 조회 (`ShortsPoolManager.next_video_id`)- **Python → JS**: `GET /api/events`로 여는 SSE(Server-Sent Events) 스트림 하나.
   카메라 프레임(`type: "frame"`)과 카메라 준비 완료(`type: "camera_ready"`) 메시지를
   JSON으로 브로드캐스트하며, `script.js`가 페이지 로드 시점에 `EventSource`로 구독해
   기존 `window.updateFrame(...)` / `window.onCameraReady()` 콜백을 그대로 호출합니다.
@@ -216,10 +233,37 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
 전체화면(F11)은 브라우저 표준 Fullscreen API로 처리하며, 브라우저 탭은 스크립트로 강제
 종료할 수 없으므로 Escape 키로 창을 닫는 기능은 없습니다.
 
+### LLM 코칭 피드백의 마크다운 지원 범위 (볼드만)
+
+`generate_llm_advice`의 프롬프트(`main.py`)는 Gemini에게 `**볼드**`만 쓰고 제목/목록/
+기울임체 등 다른 마크다운은 쓰지 말라고 지시합니다. 프론트엔드(`script.js`)도 이에 맞춰
+`**텍스트**`만 `<strong>`으로 변환하는 `renderBoldOnlyMarkdown()`을 두고 있습니다 —
+`&`, `<`, `>`를 먼저 이스케이프해 LLM 출력에 섞인 HTML 조각이 그대로 실행되지 않게 한
+뒤, `\*\*(.+?)\*\*` 정규식만 `<strong>`으로 바꿉니다. `#`, `-`, `*이탤릭*` 같은 다른
+마크다운 문법은 이스케이프만 되고 별도로 렌더링되지 않아 그대로 문자로 보입니다(프롬프트가
+애초에 이런 문법을 쓰지 말라고 지시하므로 정상적으로는 나타나지 않아야 합니다).
+
+`finishReport()`(리포트 화면 진입 시)의 타이핑 효과는 기존에는 `innerText`로 한 글자씩
+누적했지만, 지금은 매 글자마다 누적된 원문 전체를 `renderBoldOnlyMarkdown()`으로 다시
+변환해 `innerHTML`에 통째로 대입하는 방식입니다. 타이핑 도중 `**`가 아직 닫히지 않은
+상태(예: `**절반`)에서는 정규식이 매치되지 않아 별표가 그대로 보이다가, 닫는 `**`까지
+입력되는 순간 한 번에 볼드로 바뀝니다.
+
+**`.advice-content`는 `display: flex`가 아니라 `display: block`이어야 합니다**:
+`innerText`를 쓰던 시절에는 `.advice-content`의 자식이 텍스트 노드 하나뿐이라
+`display: flex`(`align-items`/`justify-content: flex-start`로 짧은 내용을 좌상단에
+붙이려는 의도)로도 문제가 없었습니다. `innerHTML`로 바뀌면서 `<strong>` 태그가 섞이면
+"볼드 앞 텍스트 / `<strong>` / 볼드 뒤 텍스트" 식으로 자식 노드가 여러 개로 쪼개지는데,
+`display: flex`인 부모 아래에서는 이 조각들이 각각 별도의 flex item이 되어(기본
+`flex-wrap: nowrap`) 한 줄에 욱여넣히면서 각 item이 극단적으로 좁아지고, 그 안에서 단어가
+한 글자/한 단어씩 줄바꿈되는 기괴한 다단 레이아웃이 됩니다. 자식 노드 개수와 무관하게
+정상적으로 흘러가도록 `display: block`으로 바꿨습니다(`white-space: pre-wrap`은 그대로
+유지되어 줄바꿈은 계속 보존됩니다).
+
 운영자용 키보드 단축키(`script.js`의 전역 `keydown` 리스너)로 Ctrl+→/←는 화면을
 한 단계 앞/뒤로 전환하고, Ctrl+↑는 어느 화면에 있든 `resetToInitialSetup()`을 거쳐
 초기 설정 화면(screen 0)으로 즉시 이동합니다. `resetToInitialSetup()`은 타이머/폴링
-인터벌을 모두 정리하고 사전 카운트다운 오버레이를 닫은 뒤 `collectedMetrics` /
+인터벌을 모두 정리한 뒤 `collectedMetrics` /
 `finalReportData` / `currentUuid` / `captureLoopStarted` 등 세션 상태를 초기값으로
 되돌리고 `backendApi.stop_capture()`로 카메라 캡처 자체를 완전히 종료합니다. 이렇게
 어느 화면에서 넘어오든 상태를 리셋한 뒤 이동해야 다음에 다시 측정을 시작할 때 이전
@@ -257,8 +301,57 @@ shoulder → SHOULDER_ANGLE_THRESHOLD
 pelvis   → PELVIS_ANGLE_THRESHOLD
 ```
 
+### 등이 앞으로 굽음 vs 뒤로 젖혀짐 구분
+
+`torso_angle`은 계산 과정에서 `abs(dz_torso)`(2D)/`abs(torso_vec[2])`(3D)를 쓰기 때문에
+앞으로 숙이든(굽음) 뒤로 젖히든(엉덩이를 앞으로 내밀고 등받이에서 등을 뗀 채 상체만 뒤로
+기울이는 자세 등) 각도 크기 자체는 동일하게 threshold 판정에 들어갑니다(점수 계산 로직은
+변경하지 않았습니다). 다만 어느 쪽으로 굽었는지 상태 메시지로 구분하기 위해
+`_score_from_angles`에 부호가 있는 `torso_lean_sign` 인자를 추가했습니다: 2D 경로는
+`dz_torso`(부호 있는 hip.z − shoulder.z 원본 값, `abs()` 적용 전), 3D 경로는
+`torso_vec[2]`(부호 있는 hip − shoulder의 z 성분)를 그대로 전달합니다. `torso_lean_sign`이
+음수면 "등 뒤로 젖혀짐 위험", 그 외(기본값 포함)에는 기존과 동일한 "등 굽음 위험" 메시지를
+씁니다. MediaPipe 기준으로 (몸을 앞으로 숙여) 어깨가 카메라에 가까워지면 `dz_torso`가
+양수가 되도록 좌표 부호를 확인해서 맞췄으며, Astra 3D 경로도 "카메라에 가까울수록
+z가 작다"는 동일한 부호 관례를 따른다고 가정했습니다 — 실제 Astra 장비로 뒤로 젖히는
+동작을 테스트해 메시지가 반대로 나오면 `torso_lean_sign=torso_vec[2]` 앞에 마이너스를
+붙여 부호를 뒤집으면 됩니다.
+
+**시도했다가 되돌린 것 — 어깨너비 대비 세로거리 비율 방식**: `dz_torso` 기반
+`torso_angle`은 카메라가 위에서 아래를 보는 구조상 똑바로 앉아도 이미 크게 나와
+(baseline bias), `CAMERA_TILT_ANGLE_DEG`로 정확히 보정하지 않으면 등 굽음이 잘 안 잡히는
+문제가 있었습니다. 한 사람을 대상으로 촬영한 사진 5장(정상 1장, 뒤로 젖힘 2장, 앞으로
+굽음 2장)에서는 (어깨-엉덩이 세로거리 ÷ 어깨너비) 비율이 z보다 훨씬 뚜렷한 신호를 내
+`TORSO_UPRIGHT_RATIO` 기준값과 margin으로 방향까지 판정하도록 바꿔봤지만, 실제 운영
+중인 웹캠 파이프라인에서 테스트하자 "등 굽음"이 전혀 뜨지 않는 문제가 발생했습니다. 그
+사진들이 실제 앱이 쓰는 `cv2.VideoCapture` 프레임과 다른 경로(별도 카메라 앱 등)로
+촬영됐을 가능성이 있어 캘리브레이션이 실제 파이프라인과 안 맞았을 것으로 추정되지만,
+확실히 검증하지 못한 채로 이 접근 자체를 되돌렸습니다. 관련 흔적(`config.py`의
+`TORSO_UPRIGHT_RATIO`/`TORSO_RATIO_*`, `_score_from_angles`의 `torso_ratio` 인자,
+`_analyze_pose`의 `shoulder_width_px`/`torso_ratio` 계산, `CameraApp.calibrate_torso_upright`
+메서드)는 전부 제거했습니다. 이 방향을 다시 시도한다면, 사진이 아니라 **실제 운영
+중인 파이프라인에서 실시간으로 뽑은 값**으로 캘리브레이션해야 합니다.
+
 리포트의 4개 metric(`neck_score`, `torso_score`, `shoulder_score`, `pelvis_score`)은
 이 점수를 프레임별로 수집한 뒤 평균냅니다.
+
+**2D 웹캠 경로의 `neck_angle`/`torso_angle`는 y와 z를 반드시 픽셀 단위로 맞춰 계산해야
+합니다**: MediaPipe의 `landmark.z`는 "x와 같은 스케일"(이미지 가로폭 기준 정규화)인 반면
+`landmark.y`는 세로높이 기준 정규화라, 두 값을 픽셀로 변환하지 않고 그대로
+`atan2(dz, dy)`에 넣으면 가로세로 비율(예: 16:9 → 약 1.78배)만큼 z(깊이) 성분이
+축소되어 실제보다 훨씬 작은 각도가 나옵니다. 그 결과 등을 눈에 띄게 굽혀도 계산된
+`torso_angle`이 `TORSO_ANGLE_THRESHOLD`(28도)를 넘지 못해 "등 굽음 위험"이 거의
+감지되지 않는 문제가 있었습니다. `_analyze_pose`(`main.py`)의 `dy`/`dz`(neck),
+`dy_torso`/`dz_torso`(torso)는 모두 `* h` 또는 `* w`로 픽셀 스케일로 변환한 뒤
+`atan2`에 넣도록 수정되었습니다(`shoulder_angle`/`spine_lean_angle`은 애초에 `ls_x`,
+`ls_y` 등 픽셀 변환된 변수만 사용해 이 문제가 없었습니다). 3D Astra 경로
+(`_analyze_pose_3d`)는 depth 센서가 주는 실측 3D 좌표(x/y/z가 이미 동일한 물리 단위)를
+쓰므로 이 스케일 불일치가 애초에 없습니다.
+
+이 수정으로 같은 실제 자세에 대해 계산되는 `neck_angle`/`torso_angle` 값 자체가
+이전보다 커집니다(대략 `w/h` 배수만큼). 따라서 `TORSO_ANGLE_THRESHOLD`,
+`TURTLE_NECK_ANGLE_THRESHOLD` 등 기존에 버그가 있는 값 기준으로 맞춰뒀던 threshold는
+실측 각도로 다시 테스트하며 재조정이 필요할 수 있습니다.
 
 **각도 threshold/가중치 기본값은 `config.py`가 유일한 소스입니다**: 각도 threshold와
 종합 점수 가중치를 `config.py`에 모아두었고, `CameraApp.__init__`과 `setup_and_start()`의
@@ -268,6 +361,30 @@ pelvis   → PELVIS_ANGLE_THRESHOLD
 `camera_source`, `debug_cam_idx`만 body에서 읽습니다). 각도/가중치를 바꾸려면 서버를
 재시작하기 전에 `config.py`를 수정하세요. 카메라 소스(`카메라 소스` select)와 웹캠/Astra
 장치 인덱스는 여전히 `index.html` 설정 화면에서 매 실행마다 고를 수 있습니다.
+
+### 카메라 설치 기울기 보정 (`CAMERA_TILT_ANGLE_DEG`)
+
+TV 위 등 카메라를 얼굴보다 높은 위치에 달아 아래를 내려다보게(pitch) 설치하면, `neck_angle`
+(거북목)과 `torso_angle`(등/허리) 계산이 실제 자세와 무관하게 카메라가 아래를 보는
+각도만큼 체계적으로 틀어집니다. 이 두 각도는 랜드마크의 세로(y)-깊이(z) 성분으로
+전방 기울기를 재기 때문에, 카메라 자체의 상하 기울기가 곧바로 편향(bias)으로 섞여
+들어갑니다.
+
+- `shoulder_angle`/`pelvis_angle`(좌우 y 차이로 재는 롤 성향)과 `head_tilt_angle`,
+  `spine_lean_angle`(좌우 x-y 성향)은 카메라의 상하 기울기(피치)와 원리상 거의 무관해
+  보정 대상에서 제외했습니다.
+- `config.CAMERA_TILT_ANGLE_DEG`(기본값 `0.0`)에 카메라가 아래로 기울어진 각도(도)를
+  넣으면, `_analyze_pose`/`_analyze_pose_3d`(2D 웹캠 경로와 3D Astra 경로 모두)에서
+  계산 직후 `neck_angle -= CAMERA_TILT_ANGLE_DEG`, `torso_angle -= CAMERA_TILT_ANGLE_DEG`로
+  빼서 보정합니다. `CameraApp.__init__`이 `config.py` 값을 기본으로 로드하고,
+  `setup_and_start()`도 `camera_tilt` 인자(기본값 `config.CAMERA_TILT_ANGLE_DEG`)로
+  받아 `self.CAMERA_TILT_ANGLE_DEG`를 덮어씁니다(단, 다른 각도 threshold와 마찬가지로
+  현재 프런트엔드에는 이 값을 입력하는 필드가 없으므로 실제로는 `config.py`의 값을
+  그대로 씁니다). 값을 바꾸려면 서버를 재시작하기 전에 `config.py`의
+  `CAMERA_TILT_ANGLE_DEG`를 설치 각도에 맞게 조정하세요.
+- 정밀한 광학적 보정이 아니라 소폭의 오차를 상쇄하기 위한 heuristic 보정이므로, 실제
+  설치 각도와 정확히 일치하지 않아도 되고 현장에서 측정값을 보며 미세 조정하는 것을
+  권장합니다.
 
 ### 종합 점수 가중치
 
@@ -384,6 +501,24 @@ Astra Pro 프레임 처리 루프(`run_debug_skeleton_viewer`)는 매 프레임�
 전달해 한국어 코칭 피드백을 생성합니다. 생성된 피드백은 Supabase 등 외부 DB에 저장하지
 않고, 최종 리포트 화면(`screen-6`)에만 표시됩니다.
 
+### 최저 점수 순간 사진
+
+측정(`screen-4`) 도중 `window.updateFrame`이 `sittingConfirmed` 상태에서 유효한
+`score`를 받을 때마다, 지금까지 관찰된 최저 점수(`worstScoreValue`)보다 낮으면 그 순간의
+프레임(`latestCameraFrameSrc`, 참가자 카메라 뷰에 쓰는 것과 같은 base64 JPEG)을
+`worstScorePhotoSrc`에 갱신해둡니다(`script.js`). 프레임 원본을 저장하는 게 아니라
+"지금까지 본 최저 점수 프레임 하나"만 계속 덮어쓰는 방식이라 메모리 사용은 프레임 1장
+분량으로 고정됩니다. 이 두 변수는 측정 시작(`screen-4` 진입)과 Ctrl+↑
+(`resetToInitialSetup()`)에서 함께 초기화됩니다.
+
+최종 리포트 화면(`screen-6`) 진입 시 `#worst-photo-card`(`index.html`의
+`.report-card.photo-card`)의 `<img id="report-worst-photo">`에 `worstScorePhotoSrc`를,
+캡션(`#report-worst-photo-caption`)에 `worstScoreValue`를 채웁니다. 측정 중 유효한
+점수를 한 번도 못 받았다면(`worstScorePhotoSrc`가 `null`) 카드 자체를
+`display: none`으로 숨기며, `.report-grid`의 3번째 행(`grid-template-rows`의 `auto`)이
+내용 없이 0 높이로 접혀 레이아웃에 빈 공간을 남기지 않습니다. 인쇄(`@media print`) 시에도
+`.photo-card`에 `order: 4`를 줘서 다른 카드들과 함께 세로 1열로 배치됩니다.
+
 ### 최종 리포트 인쇄
 
 기존에는 최종 리포트에서 QR 코드로 모바일 결과 페이지에 연결했지만, 현재는 앱 화면에서
@@ -395,7 +530,9 @@ UI 요소에는 `no-print` 클래스를 붙여 관리합니다.
 ### 운영자 카메라 모니터링
 
 디버그 모드 옵션(체크박스)은 제거되었고, 카메라가 동작하는 동안(설정 이후 ~ 측정 종료까지)
-운영자 PC에는 항상 모니터링 창이 뜹니다.
+운영자 PC에는 항상 모니터링 창이 뜹니다. (이 "디버그 모드"는 이 cv2 모니터링 창을
+켜고 끄던 예전 옵션을 가리키며, [화면 흐름을 건너뛰는 `cfg-debug-mode`
+체크박스](#디버그-모드-cfg-debug-mode)와는 별개의, 지금은 없는 기능입니다.)
 
 - **Astra Pro**: 기존 Open3D `SkeletonViewer` 3D 스켈레톤 창이 항상 실행되는 것에 더해
   (`run_debug_skeleton_viewer(show_viewer=True)` 고정), `CameraApp.start_camera_thread`가
@@ -512,7 +649,7 @@ API 로드 완료 시 자동 호출되어 플레이어를 생성하고(`controls
 초기화됩니다. 카메라 화면이 보이는 동안에는 "다음 영상" 버튼(`.next-short-btn`)이
 숨겨집니다(`.viewfinder-wrapper.mode-camera .next-short-btn { display: none; }`).
 
-타이머·상태 오버레이·사전 카운트다운은 기존과 동일하게 두 화면 위에 그대로 얹힙니다.
+타이머·상태 오버레이는 기존과 동일하게 두 화면 위에 그대로 얹힙니다.
 `#camera-view`로의 카메라 프레임 렌더링은 [운영자 카메라 모니터링](#운영자-카메라-모니터링)에
 설명된 좌우 반전 로직을 그대로 따르며, `createFrameRenderer`의 busy-drop 가드(이전 프레임
 디코딩이 끝나지 않았으면 최신 프레임만 보관했다가 이어서 그리는 방식)도 동일하게 적용됩니다.
@@ -557,6 +694,14 @@ API 로드 완료 시 자동 호출되어 플레이어를 생성하고(`controls
 `#shorts-player`(및 유튜브 API가 이를 대체한 iframe)와 `#shorts-scroll-shield`는
 형제 관계로, 둘 다 `.shorts-video-wrap`을 기준으로 `position: absolute; inset` 형태로
 꽉 채워집니다.
+
+### 쇼츠 키보드 탐색
+
+전역 `keydown` 리스너(`script.js`)에서 Ctrl 없이 순수 방향키만 눌렀을 때, 휠 탐색과
+동일한 조건(`currentIndex === 4`이고 `viewMode !== 'camera'`)이면 `ArrowRight`는
+`goToNextShort()`, `ArrowLeft`는 `goToPrevShort()`를 호출합니다. 같은 리스너의 Ctrl+
+방향키(화면 전환)/Ctrl+↑(초기화) 분기와는 `e.ctrlKey` 여부로 구분되므로 서로 겹치지
+않습니다.
 
 ### 배경: 왜 이 구조로 바뀌었는가
 

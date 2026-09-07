@@ -1250,6 +1250,7 @@ class CameraApp:
         self.PELVIS_ANGLE_THRESHOLD = config.PELVIS_ANGLE_THRESHOLD
         self.HEAD_TILT_ANGLE_THRESHOLD = config.HEAD_TILT_ANGLE_THRESHOLD
         self.SPINE_LEAN_ANGLE_THRESHOLD = config.SPINE_LEAN_ANGLE_THRESHOLD
+        self.CAMERA_TILT_ANGLE_DEG = config.CAMERA_TILT_ANGLE_DEG
 
         self.WEIGHT_NECK = config.WEIGHT_NECK
         self.WEIGHT_TRUNK = config.WEIGHT_TRUNK
@@ -1321,6 +1322,7 @@ class CameraApp:
         pelvis=config.PELVIS_ANGLE_THRESHOLD,
         head=config.HEAD_TILT_ANGLE_THRESHOLD,
         spine=config.SPINE_LEAN_ANGLE_THRESHOLD,
+        camera_tilt=config.CAMERA_TILT_ANGLE_DEG,
         camera_idx=None,
         camera_source="webcam",
         debug_cam_idx=None,
@@ -1338,6 +1340,7 @@ class CameraApp:
             self.PELVIS_ANGLE_THRESHOLD = float(pelvis)
             self.HEAD_TILT_ANGLE_THRESHOLD = float(head)
             self.SPINE_LEAN_ANGLE_THRESHOLD = float(spine)
+            self.CAMERA_TILT_ANGLE_DEG = float(camera_tilt)
 
             def _to_weight(v):
                 try:
@@ -1393,6 +1396,7 @@ class CameraApp:
         shoulder_angle,
         pelvis_angle,
         leg_cross,
+        torso_lean_sign=1.0,
     ):
         status_list = []
         q1, p1 = self._threshold_quality(
@@ -1408,12 +1412,17 @@ class CameraApp:
             status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
 
         q3, p3 = self._threshold_quality(torso_angle, self.TORSO_ANGLE_THRESHOLD, 10.0)
+        torso_is_backward = torso_lean_sign < 0
+
         q4, p4 = self._threshold_quality(
             spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD, 8.0
         )
         q_torso = min(q3, q4)
         if p3:
-            status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
+            if torso_is_backward:
+                status_list.append(f"등 뒤로 젖혀짐 위험 ({torso_angle:.1f}도)")
+            else:
+                status_list.append(f"등 굽음 위험 ({torso_angle:.1f}도)")
         if p4:
             status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
 
@@ -1479,9 +1488,10 @@ class CameraApp:
         le_x, le_y = left_ear.x * w, left_ear.y * h
         re_x, re_y = right_ear.x * w, right_ear.y * h
 
-        dy = nose.y - (left_ear.y + right_ear.y) / 2
-        dz = ((left_ear.z + right_ear.z) / 2) - nose.z
+        dy = (nose.y * h) - ((le_y + re_y) / 2)
+        dz = ((left_ear.z + right_ear.z) / 2 * w) - (nose.z * w)
         neck_angle = 90 - math.degrees(math.atan2(abs(dz), dy)) if dy != 0 else 0
+        neck_angle -= self.CAMERA_TILT_ANGLE_DEG
 
         head_tilt_angle = (
             math.degrees(math.atan2(abs(le_y - re_y), abs(le_x - re_x)))
@@ -1489,15 +1499,14 @@ class CameraApp:
             else 90.0
         )
 
-        dy_torso = ((left_hip_lm.y + right_hip_lm.y) / 2) - (
-            (left_shoulder.y + right_shoulder.y) / 2
-        )
-        dz_torso = ((left_hip_lm.z + right_hip_lm.z) / 2) - (
-            (left_shoulder.z + right_shoulder.z) / 2
+        dy_torso = ((lh_y + rh_y) / 2) - ((ls_y + rs_y) / 2)
+        dz_torso = ((left_hip_lm.z + right_hip_lm.z) / 2 * w) - (
+            (left_shoulder.z + right_shoulder.z) / 2 * w
         )
         torso_angle = (
             math.degrees(math.atan2(abs(dz_torso), dy_torso)) if dy_torso != 0 else 0
         )
+        torso_angle -= self.CAMERA_TILT_ANGLE_DEG
 
         dx_spine = ((ls_x + rs_x) / 2) - ((lh_x + rh_x) / 2)
         dy_spine = ((lh_y + rh_y) / 2) - ((ls_y + rs_y) / 2)
@@ -1527,6 +1536,7 @@ class CameraApp:
             shoulder_angle,
             pelvis_angle,
             leg_cross,
+            torso_lean_sign=dz_torso,
         )
         return (
             status_text,
@@ -1571,6 +1581,7 @@ class CameraApp:
 
         neck_vec = mid_ear - mid_shoulder
         neck_angle = math.degrees(math.atan2(abs(neck_vec[2]), abs(neck_vec[1])))
+        neck_angle -= self.CAMERA_TILT_ANGLE_DEG
 
         head_tilt_angle = (
             math.degrees(math.atan2(abs(re3d[1] - le3d[1]), abs(re3d[0] - le3d[0])))
@@ -1580,6 +1591,7 @@ class CameraApp:
 
         torso_vec = mid_hip - mid_shoulder
         torso_angle = math.degrees(math.atan2(abs(torso_vec[2]), abs(torso_vec[1])))
+        torso_angle -= self.CAMERA_TILT_ANGLE_DEG
 
         spine_lean_angle = math.degrees(
             math.atan2(abs(torso_vec[0]), abs(torso_vec[1]))
@@ -1607,6 +1619,7 @@ class CameraApp:
             shoulder_angle,
             pelvis_angle,
             leg_cross,
+            torso_lean_sign=torso_vec[2],
         )
         return (
             status_text,
@@ -1637,7 +1650,8 @@ class CameraApp:
 
         위 점수를 바탕으로 사용자의 자세 습관과 우선적으로 개선할 부분, 추천하는 행동을 조언하세요.
         답변은 읽기 쉽게 1문단 정도로 간결하게 한국어로 작성하세요.
-        마크다운을 사용하지 말고 줄글로 작성하세요.
+        마크다운은 **볼드**만 사용할 수 있습니다. 제목, 목록, 기울임체 등 다른 마크다운 문법은
+        사용하지 마세요.
         사용자는 이미 해당 수치를 알고 있습니다. 조언만 출력하세요.
         """
 

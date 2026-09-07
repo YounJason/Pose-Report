@@ -13,7 +13,6 @@ let captureLoopStarted = false;
 let cameraLoadingTimeout = null;
 
 let sittingConfirmed = false;
-let preCountdownTimeout = null;
 
 let currentUuid = "";
 
@@ -36,6 +35,9 @@ let finalReportData = {
 };
 
 let generatedLLMAdvice = "";
+
+let worstScoreValue = null;
+let worstScorePhotoSrc = null;
 
 const SUPABASE_URL = "https://orehrskvecfrfqxdhfur.supabase.co";
 
@@ -393,8 +395,6 @@ async function showScreen(index, useFade = true) {
 
     if (currentIndex === 4) {
         clearInterval(countdownInterval);
-        clearTimeout(preCountdownTimeout);
-        preCountdownTimeout = null;
         sittingConfirmed = false;
         backendApi.toggle_camera(false);
         if (shortsPlayerReady && shortsPlayer) shortsPlayer.stopVideo();
@@ -425,7 +425,7 @@ async function showScreen(index, useFade = true) {
 
         clearTimeout(cameraLoadingTimeout);
         cameraLoadingTimeout = setTimeout(() => {
-            if (currentIndex === 1) showScreen(2, true);
+            if (currentIndex === 1) showScreen(isDebugMode() ? 4 : 2, true);
         }, 20000);
     }
 
@@ -480,18 +480,22 @@ async function showScreen(index, useFade = true) {
         goToNextShort();
 
         collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
+        worstScoreValue = null;
+        worstScorePhotoSrc = null;
 
         timeLeft = 30;
         isPaused = true;
         sittingConfirmed = false;
-        hidePreCountdown();
 
         const timerEl = document.getElementById('timer');
         timerEl.innerText = "30";
 
+        const statusBox = document.getElementById('status-box');
+        if (statusBox) statusBox.style.display = isDebugMode() ? '' : 'none';
+
         clearInterval(countdownInterval);
         countdownInterval = setInterval(() => {
-            if (isPaused) return;
+            if (isPaused || isDebugMode()) return;
 
             timeLeft--;
             timerEl.innerText = String(timeLeft).padStart(2, '0');
@@ -547,6 +551,21 @@ async function showScreen(index, useFade = true) {
             scoreNumEl.innerText = finalReportData.score;
         }
 
+        const photoCardEl = document.getElementById('worst-photo-card');
+        const photoImgEl = document.getElementById('report-worst-photo');
+        const photoCaptionEl = document.getElementById('report-worst-photo-caption');
+        if (photoCardEl && photoImgEl) {
+            if (worstScorePhotoSrc) {
+                photoImgEl.src = worstScorePhotoSrc;
+                if (photoCaptionEl) {
+                    photoCaptionEl.innerText = `측정 중 가장 낮았던 점수: ${worstScoreValue}점`;
+                }
+                photoCardEl.style.display = '';
+            } else {
+                photoCardEl.style.display = 'none';
+            }
+        }
+
         const setMetricUI = (valId, barId, value, goodText, warnText) => {
             const valEl = document.getElementById(valId);
             const barEl = document.getElementById(barId);
@@ -586,13 +605,15 @@ async function showScreen(index, useFade = true) {
             const Advice = generatedLLMAdvice;
             const container = document.getElementById('llm-advice');
             if (container) {
-                container.innerText = '';
+                container.innerHTML = '';
                 clearInterval(typingInterval);
                 let index = 0;
+                let rawText = '';
                 typingInterval = setInterval(() => {
                     if (index < Advice.length) {
-                        container.innerText += Advice.charAt(index);
+                        rawText += Advice.charAt(index);
                         index++;
+                        container.innerHTML = renderBoldOnlyMarkdown(rawText);
                         container.scrollTop = container.scrollHeight;
                     } else {
                         clearInterval(typingInterval);
@@ -601,6 +622,19 @@ async function showScreen(index, useFade = true) {
             }
         }, fadeDelay);
     }
+}
+
+function isDebugMode() {
+    const el = document.getElementById('cfg-debug-mode');
+    return el ? el.checked : false;
+}
+
+function renderBoldOnlyMarkdown(text) {
+    const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 }
 
 function syncCameraFieldsVisibility() {
@@ -639,53 +673,9 @@ document.getElementById('btn-print').addEventListener('click', () => window.prin
 window.onCameraReady = function () {
     if (currentIndex === 1) {
         clearTimeout(cameraLoadingTimeout);
-        showScreen(2, true);
+        showScreen(isDebugMode() ? 4 : 2, true);
     }
 };
-
-function hidePreCountdown() {
-    clearTimeout(preCountdownTimeout);
-    preCountdownTimeout = null;
-    const overlay = document.getElementById('precountdown-overlay');
-    if (overlay) overlay.classList.remove('active');
-}
-
-function restartPreCountdownAnimation(numberEl) {
-    numberEl.style.animation = 'none';
-    void numberEl.offsetWidth;
-    numberEl.style.animation = '';
-}
-
-function startPreCountdown() {
-    const overlay = document.getElementById('precountdown-overlay');
-    const numberEl = document.getElementById('precountdown-number');
-    if (!overlay || !numberEl) {
-        sittingConfirmed = true;
-        isPaused = false;
-        return;
-    }
-
-    clearTimeout(preCountdownTimeout);
-    let count = 3;
-    overlay.classList.add('active');
-    numberEl.textContent = String(count);
-    restartPreCountdownAnimation(numberEl);
-
-    const tick = () => {
-        count -= 1;
-        if (count <= 0) {
-            overlay.classList.remove('active');
-            preCountdownTimeout = null;
-            sittingConfirmed = true;
-            isPaused = false;
-            return;
-        }
-        numberEl.textContent = String(count);
-        restartPreCountdownAnimation(numberEl);
-        preCountdownTimeout = setTimeout(tick, 1000);
-    };
-    preCountdownTimeout = setTimeout(tick, 1000);
-}
 
 window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAng, torsoAng, shoulderAng, pelvisAng, legCross, partScores) {
     if (currentIndex !== 4) return;
@@ -710,15 +700,19 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
     if (isNormal === 1 || isNormal === 0) {
         statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
 
-        if (!sittingConfirmed && preCountdownTimeout === null) {
-            isPaused = true;
-            startPreCountdown();
+        if (!sittingConfirmed) {
+            sittingConfirmed = true;
+            isPaused = false;
         }
 
         if (sittingConfirmed) {
             isPaused = false;
             if (typeof score === 'number') {
                 collectedMetrics.scores.push(score);
+                if (worstScoreValue === null || score < worstScoreValue) {
+                    worstScoreValue = score;
+                    worstScorePhotoSrc = latestCameraFrameSrc;
+                }
                 const scores = partScores || {};
                 collectedMetrics.turtle.push(typeof scores.neck === "number" ? scores.neck : (turtleAng || 0));
                 collectedMetrics.torso.push(typeof scores.torso === "number" ? scores.torso : (torsoAng || 0));
@@ -731,7 +725,6 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
         statusBox.classList.add("status-unknown");
         isPaused = true;
         sittingConfirmed = false;
-        hidePreCountdown();
     }
 };
 
@@ -751,8 +744,6 @@ function resetToInitialSetup() {
     clearInterval(typingInterval);
     typingInterval = null;
 
-    hidePreCountdown();
-
     timeLeft = 30;
     isPaused = true;
     sittingConfirmed = false;
@@ -761,6 +752,8 @@ function resetToInitialSetup() {
 
     collectedMetrics = { scores: [], turtle: [], torso: [], shoulder: [], pelvis: [], legCross: [] };
     finalReportData = { score: 0, turtle: 0, torso: 0, shoulder: 0, pelvis: 0, legCrossSeconds: 0 };
+    worstScoreValue = null;
+    worstScorePhotoSrc = null;
     generatedLLMAdvice = "";
 
     backendApi.stop_capture();
@@ -783,6 +776,14 @@ window.addEventListener('keydown', (e) => {
         } else if (e.key === 'ArrowUp') {
             e.preventDefault();
             resetToInitialSetup();
+        }
+    } else if (currentIndex === 4 && viewMode !== 'camera') {
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            goToNextShort();
+        } else if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            goToPrevShort();
         }
     }
     if (e.key === 'F11') {
