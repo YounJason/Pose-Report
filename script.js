@@ -8,6 +8,11 @@ let typingInterval = null;
 let timeLeft = 60;
 let isPaused = false;
 
+let preCountdownActive = false;
+let preCountdownInterval = null;
+let preCountdownValue = 5;
+const PRE_COUNTDOWN_START = 5;
+
 let captureLoopStarted = false;
 
 let cameraLoadingTimeout = null;
@@ -207,8 +212,11 @@ function createShortsPlayer() {
                     shortsPlayer.seekTo(0, true);
                     shortsPlayer.playVideo();
                 }
-                if (event.data === YT.PlayerState.CUED && viewMode !== 'camera') {
+                if (event.data === YT.PlayerState.CUED && viewMode !== 'camera' && !preCountdownActive) {
                     shortsPlayer.playVideo();
+                }
+                if (event.data === YT.PlayerState.PLAYING && preCountdownActive) {
+                    try { shortsPlayer.pauseVideo(); } catch (e) {}
                 }
                 if (currentIndex !== 4) {
                     try { shortsPlayer.pauseVideo(); } catch (e) {}
@@ -336,6 +344,7 @@ document.getElementById('btn-prev-short').addEventListener('click', () => {
     function handleShortsWheel(e) {
         if (currentIndex !== 4) return;
         if (viewMode === 'camera') return;
+        if (preCountdownActive) return;
         if (Math.abs(e.deltaY) < 8) return;
         e.preventDefault();
         if (wheelLocked) return;
@@ -395,6 +404,10 @@ async function showScreen(index, useFade = true) {
 
     if (currentIndex === 4) {
         clearInterval(countdownInterval);
+        clearInterval(preCountdownInterval);
+        preCountdownInterval = null;
+        preCountdownActive = false;
+        hidePreCountdownOverlay();
         sittingConfirmed = false;
         backendApi.toggle_camera(false);
         if (shortsPlayerReady && shortsPlayer) shortsPlayer.stopVideo();
@@ -416,6 +429,10 @@ async function showScreen(index, useFade = true) {
     screens[currentIndex].classList.remove('active');
     currentIndex = index;
     screens[currentIndex].classList.add('active');
+
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+    }
 
     if (currentIndex === 1) {
         if (!captureLoopStarted) {
@@ -488,35 +505,67 @@ async function showScreen(index, useFade = true) {
         sittingConfirmed = false;
 
         const timerEl = document.getElementById('timer');
-        timerEl.innerText = "60";
 
         const statusBox = document.getElementById('status-box');
         if (statusBox) statusBox.style.display = isDebugMode() ? '' : 'none';
 
         clearInterval(countdownInterval);
-        countdownInterval = setInterval(() => {
-            if (isPaused || isDebugMode()) return;
+        clearInterval(preCountdownInterval);
 
-            timeLeft--;
-            timerEl.innerText = String(timeLeft).padStart(2, '0');
+        const startMeasurementCountdown = () => {
+            preCountdownActive = false;
+            hidePreCountdownOverlay();
+            timerEl.innerText = "60";
 
-            if (timeLeft <= 0) {
-                clearInterval(countdownInterval);
-
-                const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-                const legCrossRatio = calcAvg(collectedMetrics.legCross);
-                finalReportData = {
-                    score: Math.round(calcAvg(collectedMetrics.scores)),
-                    turtle: parseFloat(calcAvg(collectedMetrics.turtle).toFixed(1)),
-                    torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
-                    shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
-                    pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1)),
-                    legCrossSeconds: parseFloat((legCrossRatio * 60).toFixed(1))
-                };
-
-                showScreen(5, true);
+            if (shortsPlayerReady && shortsPlayer && viewMode !== 'camera') {
+                try { shortsPlayer.playVideo(); } catch (e) {}
             }
-        }, 1000);
+
+            countdownInterval = setInterval(() => {
+                if (isPaused || isDebugMode()) return;
+
+                timeLeft--;
+                timerEl.innerText = String(timeLeft).padStart(2, '0');
+
+                if (timeLeft <= 0) {
+                    clearInterval(countdownInterval);
+
+                    const calcAvg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                    const legCrossRatio = calcAvg(collectedMetrics.legCross);
+                    finalReportData = {
+                        score: Math.round(calcAvg(collectedMetrics.scores)),
+                        turtle: parseFloat(calcAvg(collectedMetrics.turtle).toFixed(1)),
+                        torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
+                        shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
+                        pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1)),
+                        legCrossSeconds: parseFloat((legCrossRatio * 60).toFixed(1))
+                    };
+
+                    showScreen(5, true);
+                }
+            }, 1000);
+        };
+
+        if (isDebugMode()) {
+            timerEl.innerText = "60";
+            startMeasurementCountdown();
+        } else {
+            preCountdownActive = true;
+            preCountdownValue = PRE_COUNTDOWN_START;
+            timerEl.innerText = "60";
+            showPreCountdownOverlay(preCountdownValue);
+
+            preCountdownInterval = setInterval(() => {
+                preCountdownValue--;
+                if (preCountdownValue <= 0) {
+                    clearInterval(preCountdownInterval);
+                    preCountdownInterval = null;
+                    startMeasurementCountdown();
+                } else {
+                    showPreCountdownOverlay(preCountdownValue);
+                }
+            }, 1000);
+        }
     }
 
     if (currentIndex === 5) {
@@ -566,27 +615,36 @@ async function showScreen(index, useFade = true) {
             }
         }
 
-        const setMetricUI = (valId, barId, value, goodText, warnText) => {
+        const SCORE_TIER_NORMAL_MIN = 85;
+        const SCORE_TIER_CAUTION_MIN = 60;
+
+        const tierFor = (numeric) => {
+            if (numeric >= SCORE_TIER_NORMAL_MIN) return { key: 'normal', label: '정상' };
+            if (numeric >= SCORE_TIER_CAUTION_MIN) return { key: 'caution', label: '주의' };
+            return { key: 'danger', label: '위험' };
+        };
+
+        const setMetricUI = (valId, barId, value) => {
             const valEl = document.getElementById(valId);
             const barEl = document.getElementById(barId);
             const numeric = Math.max(0, Math.min(100, Number(value) || 0));
-            const isGood = numeric >= 90;
+            const tier = tierFor(numeric);
             if (valEl) {
-                valEl.innerText = `${Math.round(numeric)}점 · ${isGood ? goodText : warnText}`;
-                valEl.className = `metric-value ${isGood ? 'status-good' : 'status-warning'}`;
+                valEl.innerText = `${Math.round(numeric)}점 · ${tier.label}`;
+                valEl.className = `metric-value metric-status-${tier.key}`;
             }
             if (barEl) {
-                barEl.className = `progress-bar-fill ${isGood ? 'fill-good' : 'fill-warning'}`;
+                barEl.className = `progress-bar-fill fill-${tier.key}`;
                 return { el: barEl, width: numeric + '%' };
             }
             return null;
         };
 
         const barTargets = [
-            setMetricUI('val-turtle', 'bar-turtle', finalReportData.turtle, '양호', '주의'),
-            setMetricUI('val-torso', 'bar-torso', finalReportData.torso, '안정', '주의'),
-            setMetricUI('val-shoulder', 'bar-shoulder', finalReportData.shoulder, '정상', '주의'),
-            setMetricUI('val-pelvis', 'bar-pelvis', finalReportData.pelvis, '정상', '주의')
+            setMetricUI('val-turtle', 'bar-turtle', finalReportData.turtle),
+            setMetricUI('val-torso', 'bar-torso', finalReportData.torso),
+            setMetricUI('val-shoulder', 'bar-shoulder', finalReportData.shoulder),
+            setMetricUI('val-pelvis', 'bar-pelvis', finalReportData.pelvis)
         ];
 
         const fadeDelay = useFade ? 800 : 50;
@@ -687,6 +745,8 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
         }
     }
 
+    if (preCountdownActive) return;
+
     const statusBox = document.getElementById('status-box');
 
     if (typeof score !== 'undefined' && isNormal !== 2) {
@@ -697,8 +757,11 @@ window.updateFrame = function(base64Image, statusText, isNormal, score, turtleAn
 
     statusBox.className = "status-overlay";
 
-    if (isNormal === 1 || isNormal === 0) {
-        statusBox.classList.add(isNormal === 1 ? "status-normal" : "status-warning");
+    if (isNormal === 1 || isNormal === 0 || isNormal === -1) {
+        let statusClass = "status-normal";
+        if (isNormal === 0) statusClass = "status-warning";
+        if (isNormal === -1) statusClass = "status-danger";
+        statusBox.classList.add(statusClass);
 
         if (!sittingConfirmed) {
             sittingConfirmed = true;
@@ -734,6 +797,11 @@ function resetToInitialSetup() {
 
     clearInterval(countdownInterval);
     countdownInterval = null;
+
+    clearInterval(preCountdownInterval);
+    preCountdownInterval = null;
+    preCountdownActive = false;
+    hidePreCountdownOverlay();
 
     clearInterval(privacyPollInterval);
     privacyPollInterval = null;
@@ -777,7 +845,7 @@ window.addEventListener('keydown', (e) => {
             e.preventDefault();
             resetToInitialSetup();
         }
-    } else if (currentIndex === 4 && viewMode !== 'camera') {
+    } else if (currentIndex === 4 && viewMode !== 'camera' && !preCountdownActive) {
         if (e.key === 'ArrowRight') {
             e.preventDefault();
             goToNextShort();
@@ -795,6 +863,19 @@ window.addEventListener('keydown', (e) => {
         }
     }
 });
+
+function showPreCountdownOverlay(value) {
+    const overlay = document.getElementById('pre-countdown-overlay');
+    if (!overlay) return;
+    overlay.innerText = String(value);
+    overlay.classList.add('active');
+}
+
+function hidePreCountdownOverlay() {
+    const overlay = document.getElementById('pre-countdown-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('active');
+}
 
 let viewMode = 'shorts';
 
@@ -823,13 +904,17 @@ document.getElementById('btn-toggle-view').addEventListener('click', () => {
     setViewMode(viewMode === 'shorts' ? 'camera' : 'shorts');
 });
 
-document.getElementById('shorts-scroll-shield').addEventListener('click', () => {
-    if (shortsPlayerReady && shortsPlayer) {
-        const state = shortsPlayer.getPlayerState();
-        if (state === YT.PlayerState.PLAYING) {
-            try { shortsPlayer.pauseVideo(); } catch (e) {}
-        } else {
-            try { shortsPlayer.playVideo(); } catch (e) {}
-        }
+document.getElementById('viewfinder-wrapper').addEventListener('click', (e) => {
+    if (currentIndex !== 4) return;
+    if (viewMode === 'camera') return;
+    if (preCountdownActive) return;
+    if (e.target.closest('#btn-toggle-view, #btn-prev-short, #btn-next-short')) return;
+    if (!shortsPlayerReady || !shortsPlayer) return;
+
+    const state = shortsPlayer.getPlayerState();
+    if (state === YT.PlayerState.PLAYING) {
+        try { shortsPlayer.pauseVideo(); } catch (e) {}
+    } else {
+        try { shortsPlayer.playVideo(); } catch (e) {}
     }
 });

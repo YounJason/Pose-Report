@@ -52,7 +52,7 @@ PART_LANDMARKS = {
         LEFT_SHOULDER,
         RIGHT_SHOULDER,
     ],
-    "torso": [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP],
+    "torso": [LEFT_EAR, RIGHT_EAR, LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP],
     "shoulder": [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_ELBOW, RIGHT_ELBOW],
     "pelvis": [LEFT_HIP, RIGHT_HIP, LEFT_KNEE, RIGHT_KNEE],
 }
@@ -65,6 +65,9 @@ PART_KOREAN = {
 }
 
 PARTS = tuple(PART_LANDMARKS.keys())
+
+SCORE_TIER_NORMAL_MIN = config.SCORE_TIER_NORMAL_MIN
+SCORE_TIER_CAUTION_MIN = config.SCORE_TIER_CAUTION_MIN
 
 _REQUIRED_LANDMARKS_2D = (
     NOSE,
@@ -1245,8 +1248,12 @@ class CameraApp:
         self._astra_frame_event = threading.Event()
 
         self.TURTLE_NECK_ANGLE_THRESHOLD = config.TURTLE_NECK_ANGLE_THRESHOLD
-        self.TORSO_ROUND_RATIO_THRESHOLD = config.TORSO_ROUND_RATIO_THRESHOLD
-        self.TORSO_BACK_RISK_RATIO_THRESHOLD = config.TORSO_BACK_RISK_RATIO_THRESHOLD
+        self.NECK_SHOULDER_ROUND_RATIO_THRESHOLD = config.NECK_SHOULDER_ROUND_RATIO_THRESHOLD
+        self.NECK_SHOULDER_BACK_RATIO_THRESHOLD = config.NECK_SHOULDER_BACK_RATIO_THRESHOLD
+        self.NECK_SHOULDER_IDEAL_RATIO = config.NECK_SHOULDER_IDEAL_RATIO
+        self.TORSO_PITCH_ROUND_THRESHOLD_DEG = config.TORSO_PITCH_ROUND_THRESHOLD_DEG
+        self.TORSO_PITCH_BACK_THRESHOLD_DEG = config.TORSO_PITCH_BACK_THRESHOLD_DEG
+        self.TORSO_PITCH_BIAS_DEG = config.TORSO_PITCH_BIAS_DEG
         self.SHOULDER_ANGLE_THRESHOLD = config.SHOULDER_ANGLE_THRESHOLD
         self.PELVIS_ANGLE_THRESHOLD = config.PELVIS_ANGLE_THRESHOLD
         self.HEAD_TILT_ANGLE_THRESHOLD = config.HEAD_TILT_ANGLE_THRESHOLD
@@ -1318,8 +1325,12 @@ class CameraApp:
     def setup_and_start(
         self,
         turtle=config.TURTLE_NECK_ANGLE_THRESHOLD,
-        torso_round_ratio=config.TORSO_ROUND_RATIO_THRESHOLD,
-        torso_back_risk_ratio=config.TORSO_BACK_RISK_RATIO_THRESHOLD,
+        torso_round_ratio=config.NECK_SHOULDER_ROUND_RATIO_THRESHOLD,
+        torso_back_risk_ratio=config.NECK_SHOULDER_BACK_RATIO_THRESHOLD,
+        torso_ideal_ratio=config.NECK_SHOULDER_IDEAL_RATIO,
+        torso_pitch_round=config.TORSO_PITCH_ROUND_THRESHOLD_DEG,
+        torso_pitch_back=config.TORSO_PITCH_BACK_THRESHOLD_DEG,
+        torso_pitch_bias=config.TORSO_PITCH_BIAS_DEG,
         shoulder=config.SHOULDER_ANGLE_THRESHOLD,
         pelvis=config.PELVIS_ANGLE_THRESHOLD,
         head=config.HEAD_TILT_ANGLE_THRESHOLD,
@@ -1337,8 +1348,12 @@ class CameraApp:
     ):
         with self.lock:
             self.TURTLE_NECK_ANGLE_THRESHOLD = float(turtle)
-            self.TORSO_ROUND_RATIO_THRESHOLD = float(torso_round_ratio)
-            self.TORSO_BACK_RISK_RATIO_THRESHOLD = float(torso_back_risk_ratio)
+            self.NECK_SHOULDER_ROUND_RATIO_THRESHOLD = float(torso_round_ratio)
+            self.NECK_SHOULDER_BACK_RATIO_THRESHOLD = float(torso_back_risk_ratio)
+            self.NECK_SHOULDER_IDEAL_RATIO = float(torso_ideal_ratio)
+            self.TORSO_PITCH_ROUND_THRESHOLD_DEG = float(torso_pitch_round)
+            self.TORSO_PITCH_BACK_THRESHOLD_DEG = float(torso_pitch_back)
+            self.TORSO_PITCH_BIAS_DEG = float(torso_pitch_bias)
             self.SHOULDER_ANGLE_THRESHOLD = float(shoulder)
             self.PELVIS_ANGLE_THRESHOLD = float(pelvis)
             self.HEAD_TILT_ANGLE_THRESHOLD = float(head)
@@ -1384,28 +1399,68 @@ class CameraApp:
 
     @staticmethod
     def _threshold_quality(angle, threshold, severe_gap):
-        over = float(angle) - float(threshold)
-        if over <= 0.0:
+        angle = abs(float(angle))
+        threshold = max(1e-6, float(threshold))
+        if angle <= 0.0:
             return 100.0, False
+        if angle < threshold:
+            ratio = angle / threshold
+            span = 100.0 - SCORE_TIER_CAUTION_MIN
+            return 100.0 - span * ratio, False
+        over = angle - threshold
         severity = max(0.0, min(1.0, over / max(1e-6, severe_gap)))
-        return 89.0 * (1.0 - severity), True
+        return SCORE_TIER_CAUTION_MIN * (1.0 - severity), True
 
     @staticmethod
-    def _torso_ratio_quality(ratio, round_threshold, back_risk_threshold):
+    def _neck_shoulder_ratio_quality(ratio, round_threshold, back_threshold, ideal_ratio):
         ratio = float(ratio)
-        if ratio >= round_threshold:
-            severity = max(0.0, min(1.0, (ratio - round_threshold) / 0.4))
-            return 89.0 * (1.0 - severity), "round"
-        if ratio <= back_risk_threshold:
-            severity = max(0.0, min(1.0, (back_risk_threshold - ratio) / 0.3))
-            return 89.0 * (1.0 - severity), "back"
-        return 100.0, None
+        round_threshold = float(round_threshold)
+        back_threshold = float(back_threshold)
+        span = 100.0 - SCORE_TIER_CAUTION_MIN
+
+        if ratio <= round_threshold:
+            severity = max(0.0, min(1.0, (round_threshold - ratio) / 0.15))
+            return SCORE_TIER_CAUTION_MIN * (1.0 - severity), "round"
+        if ratio >= back_threshold:
+            severity = max(0.0, min(1.0, (ratio - back_threshold) / 0.15))
+            return SCORE_TIER_CAUTION_MIN * (1.0 - severity), "back"
+
+        ideal = max(round_threshold + 1e-6, min(back_threshold - 1e-6, float(ideal_ratio)))
+        if ratio >= ideal:
+            seg = max(1e-6, back_threshold - ideal)
+            return 100.0 - span * ((ratio - ideal) / seg), None
+        seg = max(1e-6, ideal - round_threshold)
+        return 100.0 - span * ((ideal - ratio) / seg), None
+
+    @staticmethod
+    def _torso_pitch_quality(angle_deg, round_threshold_deg, back_threshold_deg):
+        angle_deg = float(angle_deg)
+        round_threshold_deg = abs(float(round_threshold_deg))
+        back_threshold_deg = abs(float(back_threshold_deg))
+        span = 100.0 - SCORE_TIER_CAUTION_MIN
+
+        if angle_deg <= -round_threshold_deg:
+            over = (-angle_deg) - round_threshold_deg
+            severity = max(0.0, min(1.0, over / 8.0))
+            return SCORE_TIER_CAUTION_MIN * (1.0 - severity), "round"
+        if angle_deg >= back_threshold_deg:
+            over = angle_deg - back_threshold_deg
+            severity = max(0.0, min(1.0, over / 8.0))
+            return SCORE_TIER_CAUTION_MIN * (1.0 - severity), "back"
+
+        if angle_deg <= 0.0:
+            seg = max(1e-6, round_threshold_deg)
+            return 100.0 - span * ((-angle_deg) / seg), None
+        seg = max(1e-6, back_threshold_deg)
+        return 100.0 - span * (angle_deg / seg), None
 
     def _score_from_angles(
         self,
         neck_angle,
         head_tilt_angle,
-        torso_ratio,
+        torso_axis_quality,
+        torso_status,
+        torso_detail_text,
         spine_lean_angle,
         shoulder_angle,
         pelvis_angle,
@@ -1420,24 +1475,22 @@ class CameraApp:
         )
         q_neck = min(q1, q2)
         if p1:
-            status_list.append(f"거북목 위험 ({neck_angle:.1f}도)")
+            status_list.append(f"거북목 위험 ({abs(neck_angle):.1f}도)")
         if p2:
-            status_list.append(f"목 기울어짐 ({head_tilt_angle:.1f}도)")
+            status_list.append(f"목 기울어짐 ({abs(head_tilt_angle):.1f}도)")
 
-        q3, torso_status = self._torso_ratio_quality(
-            torso_ratio, self.TORSO_ROUND_RATIO_THRESHOLD, self.TORSO_BACK_RISK_RATIO_THRESHOLD
-        )
+        q3 = torso_axis_quality
 
         q4, p4 = self._threshold_quality(
             spine_lean_angle, self.SPINE_LEAN_ANGLE_THRESHOLD, 8.0
         )
         q_torso = min(q3, q4)
         if torso_status == "round":
-            status_list.append(f"등 굽음 위험 (비율 {torso_ratio:.2f})")
+            status_list.append(f"등 굽음 위험 ({torso_detail_text})")
         elif torso_status == "back":
-            status_list.append(f"허리 위험 (비율 {torso_ratio:.2f})")
+            status_list.append(f"허리 위험 ({torso_detail_text})")
         if p4:
-            status_list.append(f"상체 불균형 ({spine_lean_angle:.1f}도)")
+            status_list.append(f"상체 불균형 ({abs(spine_lean_angle):.1f}도)")
 
         q_shoulder, p_shoulder = self._threshold_quality(
             shoulder_angle, self.SHOULDER_ANGLE_THRESHOLD, 8.0
@@ -1446,9 +1499,9 @@ class CameraApp:
             pelvis_angle, self.PELVIS_ANGLE_THRESHOLD, 7.0
         )
         if p_shoulder:
-            status_list.append(f"어깨 비대칭 위험 ({shoulder_angle:.1f}도)")
+            status_list.append(f"어깨 비대칭 위험 ({abs(shoulder_angle):.1f}도)")
         if p_pelvis:
-            status_list.append(f"골반 비대칭 위험 ({pelvis_angle:.1f}도)")
+            status_list.append(f"골반 비대칭 위험 ({abs(pelvis_angle):.1f}도)")
 
         metric_scores = {
             "neck": q_neck,
@@ -1468,8 +1521,23 @@ class CameraApp:
             status_list.append("다리 꼬기")
             health_score -= 20.0 * max(0.0, self.WEIGHT_LEG_CROSS)
         health_score = int(round(max(0.0, min(100.0, health_score))))
-        status_text = ", ".join(status_list) if status_list else "정상"
-        is_normal = 1 if status_text == "정상" else 0
+
+        if health_score >= SCORE_TIER_NORMAL_MIN:
+            is_normal = 1
+        elif health_score >= SCORE_TIER_CAUTION_MIN:
+            is_normal = 0
+        else:
+            is_normal = -1
+
+        if status_list:
+            status_text = ", ".join(status_list)
+        elif is_normal == 1:
+            status_text = "정상"
+        elif is_normal == 0:
+            status_text = "자세 주의"
+        else:
+            status_text = "자세 위험"
+
         sources = {p: "threshold" for p in PARTS}
         return (
             status_text,
@@ -1513,8 +1581,16 @@ class CameraApp:
         )
 
         shoulder_width = math.hypot(ls_x - rs_x, ls_y - rs_y)
-        hip_width = math.hypot(lh_x - rh_x, lh_y - rh_y)
-        torso_ratio = shoulder_width / hip_width if hip_width > 1e-6 else 1.0
+        mid_ear_x = (le_x + re_x) / 2
+        mid_ear_y = (le_y + re_y) / 2
+        mid_shoulder_x = (ls_x + rs_x) / 2
+        mid_shoulder_y = (ls_y + rs_y) / 2
+        neck_seg_len = math.hypot(mid_ear_x - mid_shoulder_x, mid_ear_y - mid_shoulder_y)
+        neck_shoulder_ratio = (
+            neck_seg_len / shoulder_width
+            if shoulder_width > 1e-6
+            else self.NECK_SHOULDER_IDEAL_RATIO
+        )
 
         dx_spine = ((ls_x + rs_x) / 2) - ((lh_x + rh_x) / 2)
         dy_spine = ((lh_y + rh_y) / 2) - ((ls_y + rs_y) / 2)
@@ -1536,10 +1612,30 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
+        q_torso_axis, torso_status = self._neck_shoulder_ratio_quality(
+            neck_shoulder_ratio,
+            self.NECK_SHOULDER_ROUND_RATIO_THRESHOLD,
+            self.NECK_SHOULDER_BACK_RATIO_THRESHOLD,
+            self.NECK_SHOULDER_IDEAL_RATIO,
+        )
+        if self.camera_enabled:
+            now = time.time()
+            if now - getattr(self, "_last_ratio_debug_print", 0.0) > 1.0:
+                self._last_ratio_debug_print = now
+                print(
+                    f"[자세측정][디버그][웹캠] neck_shoulder_ratio={neck_shoulder_ratio:.3f} "
+                    f"(round<={self.NECK_SHOULDER_ROUND_RATIO_THRESHOLD:.2f}, "
+                    f"ideal={self.NECK_SHOULDER_IDEAL_RATIO:.2f}, "
+                    f"back>={self.NECK_SHOULDER_BACK_RATIO_THRESHOLD:.2f})",
+                    flush=True,
+                )
+
         status_text, is_normal, health_score, metric_scores, sources = self._score_from_angles(
             neck_angle,
             head_tilt_angle,
-            torso_ratio,
+            q_torso_axis,
+            torso_status,
+            f"비율 {neck_shoulder_ratio:.2f}",
             spine_lean_angle,
             shoulder_angle,
             pelvis_angle,
@@ -1550,7 +1646,7 @@ class CameraApp:
             is_normal,
             health_score,
             abs(neck_angle),
-            torso_ratio,
+            neck_shoulder_ratio,
             abs(shoulder_angle),
             abs(pelvis_angle),
             bool(leg_cross),
@@ -1597,9 +1693,15 @@ class CameraApp:
         )
 
         torso_vec = mid_hip - mid_shoulder
-        shoulder_width_3d = np.linalg.norm(ls3d - rs3d)
-        hip_width_3d = np.linalg.norm(lh3d - rh3d)
-        torso_ratio = shoulder_width_3d / hip_width_3d if hip_width_3d > 1e-6 else 1.0
+        torso_vertical_vec = mid_shoulder - mid_hip
+        torso_vertical_component = abs(torso_vertical_vec[1])
+        torso_depth_component = torso_vertical_vec[2]
+        torso_pitch_angle = (
+            math.degrees(math.atan2(torso_depth_component, torso_vertical_component))
+            if torso_vertical_component > 1e-6
+            else 0.0
+        )
+        torso_pitch_angle -= self.TORSO_PITCH_BIAS_DEG
 
         spine_lean_angle = math.degrees(
             math.atan2(abs(torso_vec[0]), abs(torso_vec[1]))
@@ -1619,10 +1721,29 @@ class CameraApp:
 
         leg_cross = _detect_leg_cross(landmarks, w, h)
 
+        q_torso_axis, torso_status = self._torso_pitch_quality(
+            torso_pitch_angle,
+            self.TORSO_PITCH_ROUND_THRESHOLD_DEG,
+            self.TORSO_PITCH_BACK_THRESHOLD_DEG,
+        )
+        if self.camera_enabled:
+            now = time.time()
+            if now - getattr(self, "_last_ratio_debug_print", 0.0) > 1.0:
+                self._last_ratio_debug_print = now
+                print(
+                    f"[자세측정][디버그][Astra] torso_pitch_angle={torso_pitch_angle:.1f}도 "
+                    f"(round<=-{self.TORSO_PITCH_ROUND_THRESHOLD_DEG:.1f}, "
+                    f"back>={self.TORSO_PITCH_BACK_THRESHOLD_DEG:.1f}, "
+                    f"bias={self.TORSO_PITCH_BIAS_DEG:.1f})",
+                    flush=True,
+                )
+
         status_text, is_normal, health_score, metric_scores, sources = self._score_from_angles(
             neck_angle,
             head_tilt_angle,
-            torso_ratio,
+            q_torso_axis,
+            torso_status,
+            f"{torso_pitch_angle:.1f}도",
             spine_lean_angle,
             shoulder_angle,
             pelvis_angle,
@@ -1633,7 +1754,7 @@ class CameraApp:
             is_normal,
             health_score,
             abs(neck_angle),
-            torso_ratio,
+            torso_pitch_angle,
             abs(shoulder_angle),
             abs(pelvis_angle),
             bool(leg_cross),

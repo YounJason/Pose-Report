@@ -385,6 +385,11 @@ p {
 }
 
 .status-warning {
+    background-color: rgba(255, 244, 229, 0.95);
+    color: #b06000;
+}
+
+.status-danger {
     background-color: rgba(254, 240, 240, 0.95);
     color: #c5221f;
 }
@@ -392,6 +397,23 @@ p {
 .status-unknown {
     background-color: rgba(241, 243, 244, 0.95);
     color: #3c4043;
+}
+
+.pre-countdown-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(20, 20, 20, 0.6);
+    color: #ffffff;
+    font-size: 9rem;
+    font-weight: 700;
+    z-index: 20;
+}
+
+.pre-countdown-overlay.active {
+    display: flex;
 }
 
 .timer-badge {
@@ -560,8 +582,14 @@ p {
     white-space: nowrap;
 }
 
-.status-good { color: #137333; }
-.status-warning { color: #d93025; }
+.metric-status-normal { color: #137333; }
+.metric-status-caution { color: #b06000; }
+.metric-status-danger { color: #c5221f; }
+
+.metrics-legend {
+    margin: 8px 0 0;
+    flex: 0 0 auto;
+}
 
 .progress-bar-bg {
     width: 100%;
@@ -579,8 +607,9 @@ p {
     transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.fill-good { background-color: #34a853; }
-.fill-warning { background-color: #ea4335; }
+.fill-normal { background-color: #34a853; }
+.fill-caution { background-color: #f9ab00; }
+.fill-danger { background-color: #ea4335; }
 
 .score-photo-row {
     grid-area: bottom;

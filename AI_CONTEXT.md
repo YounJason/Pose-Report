@@ -12,6 +12,8 @@
   - [주요 기능](#주요-기능)
   - [배경](#배경)
   - [화면 구성](#화면-구성)
+  - [디버그 모드](#디버그-모드-cfg-debug-mode)
+  - [측정 시작 전 카운트다운 (5→1)](#측정-시작-전-카운트다운-5→1)
   - [파일 구조](#파일-구조)
 - [시작하기](#시작하기)
   - [설치](#설치)
@@ -24,6 +26,7 @@
   - [각도 threshold 판정](#각도-threshold-판정)
   - [종합 점수 가중치](#종합-점수-가중치)
   - [다리 꼬기](#다리-꼬기)
+  - [세부 항목 3단계 판정](#세부-항목-3단계-판정)
 - [Astra Pro 3D Depth 지원](#astra-pro-3d-depth-지원)
   - [메인 스레드 사전 초기화](#메인-스레드-사전-초기화)
   - [카메라 초기화 안정화 (레이스 컨디션/네이티브 크래시 대응)](#카메라-초기화-안정화-레이스-컨디션네이티브-크래시-대응)
@@ -36,6 +39,7 @@
   - [ShortsPoolManager 동작 구조](#shortspoolmanager-동작-구조)
   - [프런트엔드 재생 구조](#프런트엔드-재생-구조)
   - [쇼츠 / 카메라 화면 전환 토글](#쇼츠--카메라-화면-전환-토글)
+  - [쇼츠 재생/일시정지 클릭 토글](#쇼츠-재생일시정지-클릭-토글)
   - [배경: 왜 이 구조로 바뀌었는가](#배경-왜-이-구조로-바뀌었는가)
 - [기타](#기타)
 
@@ -103,6 +107,51 @@
   상태 텍스트 오버레이)가 보이도록 하고, `countdownInterval`의 tick 함수가 매 초 가장 먼저
   `isDebugMode()`를 확인해 참이면 그대로 반환해 `timeLeft`를 감소시키지 않습니다. 즉
   타이머가 "60"에서 멈춘 채로 유지됩니다.
+- **측정 시작 전 카운트다운을 건너뜁니다**: 아래 [측정 시작 전 카운트다운
+  (5→1)](#측정-시작-전-카운트다운-5→1)에서 설명하는 5초 카운트다운 오버레이 없이
+  `screen-4` 진입 즉시 (얼어붙은) 60초 타이머 상태로 바로 들어갑니다.
+
+### 측정 시작 전 카운트다운 (5→1)
+
+QR 개인정보 동의가 끝나 `screen-4`(60초 측정 화면)에 진입하면, 참가자가 방금 스캔에 쓴
+휴대폰을 손에 든 채로 측정이 시작되는 것을 막기 위해 5초짜리 카운트다운을 먼저
+보여줍니다(`showScreen`의 `currentIndex === 4` 블록, `script.js`). 디버그 모드에서는
+건너뜁니다(위 [디버그 모드](#디버그-모드-cfg-debug-mode) 참고) — QR 동의 자체를 거치지
+않고 바로 `screen-4`로 진입하는 경로이므로, 휴대폰을 들고 있을 상황이 애초에 없습니다.
+
+- **표시**: `#pre-countdown-overlay`(`.viewfinder-wrapper` 전체를 덮는 반투명 검정
+  오버레이, `z-index: 20`)에 `5`부터 `1`까지 큰 숫자로 1초 간격으로 표시합니다
+  (`showPreCountdownOverlay()`/`hidePreCountdownOverlay()`). 평소 `display: none`이다가
+  `.active` 클래스가 붙으면 `display: flex`로 나타납니다.
+- **60초 타이머는 흐르지 않습니다**: 카운트다운 동안 우측 상단 `#timer` 배지는 그냥
+  `"60"`으로 고정해두고, 실제 `countdownInterval`(매초 `timeLeft`를 감소시키는 그
+  인터벌)은 카운트다운이 끝나야 비로소 생성됩니다(`startMeasurementCountdown()`). 즉
+  이전에는 화면 진입과 동시에 `countdownInterval`이 만들어지고 `isPaused`/
+  `sittingConfirmed`로만 tick을 걸렀는데, 지금은 카운트다운 동안은 그 인터벌 자체가
+  아직 존재하지 않습니다.
+- **쇼츠는 화면에 보이되 재생되지 않습니다**: `preCountdownActive` 전역 플래그가 `true`인
+  동안에는 `onStateChange`에서 `CUED` 상태여도 자동재생을 걸지 않고, 혹시라도
+  `PLAYING` 상태로 넘어가면 그 즉시 `pauseVideo()`로 다시 멈춥니다(자동재생 정책이나
+  로드 타이밍에 따라 재생이 걸리는 여러 경로를 개별적으로 막는 대신, "재생 상태가
+  되는 순간 되돌린다"는 하나의 안전장치로 처리). 쇼츠 넘기기 버튼/휠 스크롤/방향키
+  탐색과 뷰파인더 클릭 재생·일시정지 토글도 `preCountdownActive`인 동안은 모두
+  무시합니다. 다만 오버레이 자체가 뷰파인더 전체를 덮고 있어 클릭은 애초에 오버레이가
+  가로챕니다.
+- **최저 점수 사진·점수 집계도 건너뜁니다**: `window.updateFrame`이
+  `preCountdownActive`이면 카메라 프레임 미리보기 갱신 이후 곧바로 반환해,
+  `sittingConfirmed`/`isPaused` 전환이나 `collectedMetrics`/`worstScorePhotoSrc` 갱신을
+  전혀 하지 않습니다. 서버 쪽 카메라·자세 분석 자체는 평소처럼 계속 동작하지만(백엔드는
+  이 프런트엔드 상태를 모릅니다), 그 결과를 화면이 사실상 무시하는 방식입니다. 카운트다운
+  중 참가자가 실제로 앉아 있어 `isNormal`이 정상으로 잡히더라도 무시되므로, 카운트다운이
+  끝나기 전까지는 상태가 갱신되지 않습니다.
+- **정리**: `preCountdownValue`가 `0`에 도달하면 `preCountdownInterval`을 정리하고
+  `startMeasurementCountdown()`을 호출해 `preCountdownActive = false`로 되돌리고 오버레이를
+  숨긴 뒤, 카메라 화면 보기 모드가 아니면 `shortsPlayer.playVideo()`로 쇼츠 재생을 다시
+  시작합니다(카운트다운 중 `PLAYING` 상태로 넘어갈 때마다 곧바로 되돌려 놓았으므로, 이
+  명시적 호출이 없으면 카운트다운이 끝나도 쇼츠가 계속 멈춰있게 됩니다). 그런 다음
+  `countdownInterval`을 생성해 평소와 동일한 60초 측정 로직으로 넘어갑니다. `screen-4`를
+  벗어나거나 `resetToInitialSetup()`(Ctrl+↑)이 호출되면 `preCountdownInterval`도 함께
+  정리되고 오버레이가 숨겨집니다.
 
 ### 파일 구조
 
@@ -233,6 +282,18 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
 전체화면(F11)은 브라우저 표준 Fullscreen API로 처리하며, 브라우저 탭은 스크립트로 강제
 종료할 수 없으므로 Escape 키로 창을 닫는 기능은 없습니다.
 
+**이 프로젝트는 항상 전체화면으로 운영하는 것이 원칙입니다.** F11 수동 토글과는 별개로,
+`showScreen(index, useFade)`가 화면을 전환할 때마다(즉 `index`가 바뀔 때마다) 매번
+`document.documentElement.requestFullscreen()`을 시도합니다(`script.js`). 이미
+전체화면 상태면(`document.fullscreenElement`가 존재하면) 다시 요청하지 않고 건너뜁니다.
+브라우저 정책상 `requestFullscreen()`은 사용자 제스처(클릭 등) 없이 호출하면 거부될 수
+있는데, 카메라 로딩 타임아웃이나 측정 타이머 종료처럼 사용자 제스처 없이 자동으로
+일어나는 화면 전환에서는 이 호출이 조용히 실패할 수 있습니다(`.catch(() => {})`로 무시).
+다만 최초 진입(`btn-save`/`btn-start` 클릭 등 사용자 제스처가 있는 전환)에서 이미
+전체화면에 진입해 있으므로, 이후 자동 전환에서의 실패는 대부분 실질적인 문제가 되지
+않습니다. 사용자가 Escape 등으로 전체화면을 직접 해제한 뒤 화면이 자동으로 전환되는
+경우에는 재요청이 브라우저 정책으로 막힐 수 있습니다.
+
 ### LLM 코칭 피드백의 마크다운 지원 범위 (볼드만)
 
 `generate_llm_advice`의 프롬프트(`main.py`)는 Gemini에게 `**볼드**`만 쓰고 제목/목록/
@@ -292,68 +353,150 @@ Astra Pro를 쓰는 환경(Windows)에서는 `python main.py` 대신 `run.bat`�
 ### 각도 threshold 판정
 
 각 부위는 `CameraApp._threshold_quality`를 이용해 측정 각도와 threshold의 차이를
-0~100 점수로 변환합니다. 정상 영역은 90~100, 문제 영역은 0~89로 표현됩니다.
+0~100 점수로 변환합니다. `config.SCORE_TIER_NORMAL_MIN`(기본 85) 이상이면 정상,
+`config.SCORE_TIER_CAUTION_MIN`(기본 60) 이상이면 주의, 그 미만이면 위험입니다
+(3단계 분류에 대한 자세한 내용은 [세부 항목 3단계 판정](#세부-항목-3단계-판정) 참고).
 
 ```text
 neck     → TURTLE_NECK_ANGLE_THRESHOLD, HEAD_TILT_ANGLE_THRESHOLD
-torso    → TORSO_ROUND_RATIO_THRESHOLD, TORSO_BACK_RISK_RATIO_THRESHOLD, SPINE_LEAN_ANGLE_THRESHOLD
+torso    → NECK_SHOULDER_ROUND_RATIO_THRESHOLD, NECK_SHOULDER_BACK_RATIO_THRESHOLD, SPINE_LEAN_ANGLE_THRESHOLD
 shoulder → SHOULDER_ANGLE_THRESHOLD
 pelvis   → PELVIS_ANGLE_THRESHOLD
 ```
 
-torso를 제외한 나머지는 `CameraApp._threshold_quality`(각도-threshold 차이를 0~100 점수로
-선형 변환, 정상 90~100 / 문제 0~89)를 그대로 씁니다. torso는 아래처럼 어깨/골반 너비
-비율로 판정합니다.
+torso를 제외한 나머지는 `CameraApp._threshold_quality`를 그대로 씁니다. torso는
+아래처럼 목/어깨 비율로 판정합니다.
 
-### 등 굽음 / 허리 위험 판정 (어깨·골반 너비 비율)
+**채점 곡선은 threshold 이전 구간에서도 점차 감점합니다**: 예전에는 `angle <= threshold`이면
+무조건 100점이었다가 threshold를 넘는 순간부터만 급격히 감점하는 구조라, 실제 부스 운영 중
+점수가 항상 90점대로 후하게 나오는 문제가 있었습니다. 지금은 `_threshold_quality`가
+`angle`을 `abs()`로 감싼 뒤(부호 있는 `neck_angle`이 `CAMERA_TILT_ANGLE_DEG` 보정으로 음수가
+되면서 항상 100점 구간에 고정되는 문제도 함께 해결됨), 0도에서 threshold까지를
+100점→`SCORE_TIER_CAUTION_MIN`점(기본 60점)까지 선형으로 감점하고, threshold를 넘으면
+`SCORE_TIER_CAUTION_MIN`점에서 `severe_gap`만큼 더 벌어질 때까지 0점으로 다시 선형
+감점합니다. 즉 threshold 지점이 정확히 "위험" 진입 경계(=`SCORE_TIER_CAUTION_MIN`점)가
+되도록 두 구간이 이어 붙어 있습니다. threshold/보정각도 등 `config.py`의 기존 값 자체는
+바꾸지 않았습니다 — 채점 곡선 구조만 바뀐 것이므로, 여전히 후하다고 느껴지면
+`config.py`의 threshold 값을 낮추거나 `CAMERA_TILT_ANGLE_DEG`를 조정하는 것을 고려하세요.
 
-`torso_angle`(랜드마크의 세로-깊이 성분으로 재는 수직 기울기) 대신, 양 어깨 사이 거리와
-양 골반 사이 거리의 비율 `torso_ratio = shoulder_width / hip_width`로 판정합니다. 직립
-자세에서는 보통 어깨너비가 골반너비보다 넓어 `torso_ratio`가 1보다 크게 나오는데, 등이
-앞으로 굽으면 이 비율이 더 커지고, 등받이에서 등을 떼고 뒤로 젖히거나 허리가 무너지는
-자세에서는 반대로 비율이 1 이하로 떨어지는 경향을 이용합니다.
+### 등 굽음 / 허리 위험 판정
 
-- **2D 웹캠 경로**(`_analyze_pose`): `shoulder_width = hypot(ls_x-rs_x, ls_y-rs_y)`,
-  `hip_width = hypot(lh_x-rh_x, lh_y-rh_y)`(모두 픽셀 좌표)로 계산합니다.
-- **3D Astra 경로**(`_analyze_pose_3d`): `np.linalg.norm(ls3d-rs3d)`,
-  `np.linalg.norm(lh3d-rh3d)`(실측 3D 좌표)로 계산합니다.
-- 두 경로 모두 `hip_width`가 0에 가까우면(랜드마크가 겹쳐 보이는 등) 0으로 나누는 것을
-  피하려고 `torso_ratio`를 그냥 `1.0`(정상)으로 둡니다.
+**이 판정은 세 번째 접근입니다.** 앞선 두 번의 시도가 모두 "정면 카메라 + 모두에게
+통하는 절대 threshold"라는 같은 틀 안에서 실패했습니다.
 
-`CameraApp._torso_ratio_quality(ratio, round_threshold, back_risk_threshold)`가 판정을
-담당합니다.
+1. 어깨-골반의 y-z 성분으로 잰 수직 기울기 각도(`torso_angle`) — 2D 픽셀 스케일 불일치
+   버그와 카메라 tilt 편향으로 실패.
+2. 어깨-골반 너비 비율(`shoulder_width / hip_width`) — 체형 차이 미보정, 골반 랜드마크
+   신뢰도 문제로 실제 운영 중 "등 굽음"이 거의 뜨지 않음.
+3. 목-어깨 비율(`neck_shoulder_ratio`, 바로 아래 [웹캠 경로] 참고) — 등 굽음/허리
+   위험/바른 자세 사이의 값 차이가 실측 결과 거의 나지 않음(신호가 너무 약함).
 
-- `ratio >= TORSO_ROUND_RATIO_THRESHOLD`(기본 `1.4`) → "등 굽음 위험". `1.4`에서 89점,
-  `1.8` 이상이면 0점이 되도록 선형으로 감점합니다(감점 구간 폭 `0.4`는 코드에 하드코딩).
-- `ratio <= TORSO_BACK_RISK_RATIO_THRESHOLD`(기본 `1.0`) → "허리 위험". `1.0`에서 89점,
-  `0.7` 이하면 0점이 되도록 선형으로 감점합니다(감점 구간 폭 `0.3`은 코드에 하드코딩).
-- 그 사이(`1.0` 초과 ~ `1.4` 미만)면 100점, 위험 아님.
-- 두 threshold(`TORSO_ROUND_RATIO_THRESHOLD`, `TORSO_BACK_RISK_RATIO_THRESHOLD`)만
-  `config.py`에서 조정 가능하고, 점수가 0에 도달하는 지점(`1.8`배 / `0.7`배)은 이
-  threshold와의 간격(`0.4` / `0.3`)으로 `_torso_ratio_quality` 코드에 고정돼 있습니다.
-  더 뾰족하거나 완만한 감점 곡선을 원하면 이 리터럴을 직접 수정하세요.
+세 시도 모두 정면 카메라의 2D 원근 착시(perspective illusion)에 의존했는데, 앞뒤
+굽음(시상면 움직임)은 카메라 광축 방향의 이동이라 원근 왜곡 신호 자체가 원래 작고,
+사람마다 체형·거리·카메라 각도가 달라 "모두에게 통하는 절대 숫자"가 성립하지
+않았을 가능성이 큽니다. **그래서 부스 현장에서 실제로 쓰는 Astra Pro 경로는 원근
+착시가 아니라 depth 센서의 실측 3D 좌표(미터 단위 실제 물리 거리)로 완전히 새로
+설계했습니다.** 2D 웹캠 경로는 실측 depth가 없어 이 방식을 쓸 수 없으므로, 이전
+목/어깨 비율 방식을 그대로 남겨뒀습니다(현장은 Astra만 사용하므로 웹캠 경로의
+정확도는 운영에 영향을 주지 않습니다).
+
+#### Astra 3D 경로 — 실측 전후 기울기 각도(`torso_pitch_angle`)
+
+`_analyze_pose_3d`에서 어깨 중점(`mid_shoulder`)과 골반 중점(`mid_hip`)은 depth
+센서로 역투영(backproject)한 실제 3D 좌표(미터 단위, x=좌우, y=상하, z=카메라로부터의
+깊이)입니다. 이 좌표는 2D 픽셀이 아니라 실측 물리 거리이므로, 원근 착시에 의존하지
+않고 몸이 카메라 광축 방향(z)으로 얼마나 기울었는지 직접 각도로 잴 수 있습니다.
+
+```python
+torso_vertical_vec = mid_shoulder - mid_hip
+torso_vertical_component = abs(torso_vertical_vec[1])   # 몸통의 실제 "키" 성분(상하)
+torso_depth_component = torso_vertical_vec[2]            # 어깨가 골반보다 카메라에 얼마나 가까운지(전후)
+torso_pitch_angle = degrees(atan2(torso_depth_component, torso_vertical_component))
+torso_pitch_angle -= TORSO_PITCH_BIAS_DEG
+```
+
+- `torso_depth_component`(= `shoulder.z - hip.z`)가 **음수**면 어깨가 골반보다
+  카메라에 더 가깝다는 뜻 — 등을 앞으로 굽혀 상체가 카메라 쪽으로 쏠린 상태이므로
+  "등 굽음"입니다. `torso_pitch_angle`도 음수가 됩니다.
+- 반대로 **양수**면 어깨가 골반보다 카메라에서 더 멀다는 뜻 — 의자에 기대 상체를
+  뒤로 젖힌 상태이므로 "허리 위험"입니다.
+- 완벽하게 수직으로 앉으면(어깨가 골반 바로 위) `torso_depth_component ≈ 0`이라
+  `torso_pitch_angle ≈ 0`이 됩니다. 이전 두 방식과 달리 "이상적인 값"을 임의로
+  가정할 필요 없이, 0도 자체가 해부학적으로 자연스러운 중립점입니다.
+
+`CameraApp._torso_pitch_quality(angle_deg, round_threshold_deg, back_threshold_deg)`가
+판정을 담당하며, `_threshold_quality`와 같은 스타일이지만 방향이 둘(음수 쪽 등 굽음 /
+양수 쪽 허리 위험)이라는 점만 다릅니다.
+
+- `angle_deg <= -TORSO_PITCH_ROUND_THRESHOLD_DEG`(기본 `10.0`) → "등 굽음 위험".
+  `-10.0`도에서 60점, `-18.0`도 이하면 0점이 되도록 선형 감점(감점 구간 폭 `8.0`은
+  다른 각도 계열 threshold와 동일하게 코드에 하드코딩).
+- `angle_deg >= TORSO_PITCH_BACK_THRESHOLD_DEG`(기본 `10.0`) → "허리 위험". `10.0`도에서
+  60점, `18.0`도 이상이면 0점이 되도록 선형 감점(감점 구간 폭 `8.0`).
+- 그 사이(`-10.0`도 초과 ~ `10.0`도 미만)는 0도를 기준으로 거기서 멀어질수록 100점에서
+  `SCORE_TIER_CAUTION_MIN`점(기본 60점)까지 선형 감점합니다.
+- `config.py`에서 조정 가능한 값은 `TORSO_PITCH_ROUND_THRESHOLD_DEG`,
+  `TORSO_PITCH_BACK_THRESHOLD_DEG`, `TORSO_PITCH_BIAS_DEG` 세 가지입니다.
+
+**`TORSO_PITCH_BIAS_DEG`(기본 `0.0`) — 카메라 피치 편향 보정용 여분 상수**: `neck_angle`
+계산에 쓰이는 `CAMERA_TILT_ANGLE_DEG`(기본 `45.0`)를 그대로 재사용하지 **않고** 별도
+상수로 뒀습니다. 카메라가 위·아래로 기울어 설치되면 이 새 지표도 편향을 받을 가능성이
+있지만, `neck_angle`과 벡터 방향이 달라 같은 보정값(45도)이 그대로 맞을지 검증하지
+못했습니다. 잘못된 부호로 보정값을 넣으면 편향을 상쇄하는 대신 두 배로 키울 수 있으므로,
+기본값은 보정 없음(`0.0`)으로 두고, 아래 디버그 로그로 실측한 뒤 편향이 확인되면
+현장에서 이 값을 조정하는 것을 권장합니다.
+
+**⚠️ 위 두 threshold(±10.0도)도 실측 검증을 거치지 않은 추정값입니다.** 다른 각도
+threshold(거북목 10도, 어깨/골반 7~8도)와 비슷한 크기로 맞춘 추정치일 뿐입니다.
+확인을 돕기 위해 `_analyze_pose_3d`가 `self.camera_enabled`인 동안 1초에 한 번씩
+`[자세측정][디버그][Astra] torso_pitch_angle=...` 로그를 서버 콘솔에 출력합니다. 이
+값을 보면서:
+
+1. **반듯이 앉았을 때** 값이 0도 근처가 아니면 → `TORSO_PITCH_BIAS_DEG`를 그 값만큼
+   보정(예: 반듯이 앉았는데 항상 +6도가 찍히면 `TORSO_PITCH_BIAS_DEG = 6.0`).
+2. **일부러 등을 굽혔을 때** 나오는 음수 값 → `TORSO_PITCH_ROUND_THRESHOLD_DEG`(절댓값)를
+   그 값 근처로.
+3. **의자에 기대 뒤로 젖혔을 때** 나오는 양수 값 → `TORSO_PITCH_BACK_THRESHOLD_DEG`를
+   그 값 근처로.
+
+서버 재시작만 하면 `config.py` 수정 사항이 반영됩니다.
+
+#### 웹캠 2D 경로 — 목/어깨 비율(`neck_shoulder_ratio`, 현재 미사용·유지보수용 폴백)
+
+**현장에서는 Astra Pro만 사용하므로 아래 방식은 실질적으로 쓰이지 않습니다.** 다만
+Astra 연결 실패 등으로 웹캠 모드로 전환해야 하는 비상 상황을 대비해 코드는 남겨뒀습니다.
+실측 depth가 없는 2D 웹캠에서는 위와 같은 실제 각도 측정이 불가능하므로, 이전 라운드에서
+도입한 방식(귀-어깨 거리를 어깨너비로 나눈 비율)을 그대로 유지합니다 — 검증 결과
+신호가 약하다는 게 이미 확인됐지만, Astra가 주 경로이므로 이 웹캠 폴백을 더 다듬는
+작업은 우선순위에서 제외했습니다.
+
+- `neck_shoulder_ratio = 귀 중점-어깨 중점 거리 / shoulder_width`
+- `_analyze_pose`: 픽셀 좌표로 계산. `shoulder_width`가 0에 가까우면
+  `config.NECK_SHOULDER_IDEAL_RATIO`로 대체.
+- `CameraApp._neck_shoulder_ratio_quality(ratio, round_threshold, back_threshold, ideal_ratio)`가
+  판정. `ratio <= NECK_SHOULDER_ROUND_RATIO_THRESHOLD`(기본 `0.30`)면 "등 굽음 위험",
+  `ratio >= NECK_SHOULDER_BACK_RATIO_THRESHOLD`(기본 `0.65`)면 "허리 위험", 그 사이는
+  `NECK_SHOULDER_IDEAL_RATIO`(기본 `0.45`)를 기준으로 점차 감점. 관련 설정값은
+  `config.py`의 `NECK_SHOULDER_*` 세 상수.
+- 디버그 로그: `self.camera_enabled`인 동안 1초에 한 번씩
+  `[자세측정][디버그][웹캠] neck_shoulder_ratio=...`를 콘솔에 출력합니다(Astra 경로의
+  로그와는 태그로 구분됩니다).
+
+두 경로(Astra/웹캠) 모두 `_score_from_angles`에 (등/허리 판정 quality 점수,
+`"round"`/`"back"`/`None` 상태, 화면에 보여줄 상세 문구)를 미리 계산해서 넘기는 구조로
+되어 있어, 두 경로가 완전히 다른 지표를 써도 `_score_from_angles`는 이를 그대로
+받아 조합만 합니다.
 
 기존에 "상체 불균형"으로 표시되던 좌우 기울기 판정(`spine_lean_angle`,
-`SPINE_LEAN_ANGLE_THRESHOLD`)은 이번 변경과 무관한 별도 축이라 그대로 유지했습니다.
-`q_torso = min(등/허리 비율 점수, 상체 불균형 점수)`로 여전히 두 값 중 더 낮은 쪽을
-`torso` metric 점수로 사용합니다.
+`SPINE_LEAN_ANGLE_THRESHOLD`)은 이번 변경과 무관한 별도 축이라 두 경로 모두 그대로
+유지했습니다. `q_torso = min(등/허리 판정 점수, 상체 불균형 점수)`로 여전히 두 값 중
+더 낮은 쪽을 `torso` metric 점수로 사용합니다.
 
-**이전 방식(수직 기울기 각도 `torso_angle`/`TORSO_ANGLE_THRESHOLD`/`torso_lean_sign`)은
-완전히 대체되어 제거했습니다.** 예전에는 어깨-골반의 세로(y)-깊이(z) 성분으로 수직 대비
-기울기 각도를 재고, 그 부호(`torso_lean_sign`)로 "등 굽음"과 "등 뒤로 젖혀짐"을
-구분했습니다. `CAMERA_TILT_ANGLE_DEG`로 카메라 설치 각도를 보정해야 했고, 2D 픽셀
-스케일 불일치 버그(아래 "옛 기록" 참고)도 있었습니다. 새 비율 방식은 카메라의 상하
-기울기와 원리상 거의 무관해서(어깨/골반 사이 "폭"은 카메라가 위·아래 어느 각도로
-내려다보든 크게 왜곡되지 않음) `CAMERA_TILT_ANGLE_DEG` 보정이 필요 없습니다. 이 값은
-이제 `neck_angle` 보정에만 쓰입니다.
-
-**(옛 기록) 시도했다가 되돌린 것 — 어깨너비 대비 세로거리 비율 방식**: 위 각도 방식을
-쓰던 시절, 같은 문제(카메라 tilt로 인한 baseline bias)를 어깨-엉덩이 세로거리 ÷
+**(옛 기록) 시도했다가 되돌린 것 — 어깨너비 대비 세로거리 비율 방식**: 맨 처음 각도
+방식을 쓰던 시절, 같은 문제(카메라 tilt로 인한 baseline bias)를 어깨-엉덩이 세로거리 ÷
 어깨너비 비율로 풀어보려 한 적이 있습니다. 사진 5장으로는 신호가 뚜렷했지만 실제 운영
 중인 웹캠 파이프라인에서는 "등 굽음"이 전혀 뜨지 않아 되돌렸습니다(관련 흔적:
 `TORSO_UPRIGHT_RATIO`/`TORSO_RATIO_*`, `calibrate_torso_upright` 등, 전부 제거됨).
-지금의 "어깨너비 ÷ 골반너비" 비율은 이것과는 다른 지표(세로거리가 아니라 좌우 폭끼리
-비교)라 같은 실패를 반복할지는 실제 부스 운영 중 계속 지켜봐야 합니다.
 
 리포트의 4개 metric(`neck_score`, `torso_score`, `shoulder_score`, `pelvis_score`)은
 이 점수를 프레임별로 수집한 뒤 평균냅니다.
@@ -365,10 +508,9 @@ MediaPipe의 `landmark.z`는 "x와 같은 스케일"(이미지 가로폭 기준 
 축소되어 실제보다 훨씬 작은 각도가 나옵니다. `_analyze_pose`(`main.py`)의 `dy`/`dz`는
 모두 `* h` 또는 `* w`로 픽셀 스케일로 변환한 뒤 `atan2`에 넣도록 되어 있습니다
 (`shoulder_angle`/`spine_lean_angle`은 애초에 `ls_x`, `ls_y` 등 픽셀 변환된 변수만
-사용해 이 문제가 없었고, `torso`는 이제 각도가 아니라 어깨/골반 너비 비율로 계산하므로
-이 스케일 문제 자체가 해당되지 않습니다). 3D Astra 경로(`_analyze_pose_3d`)는 depth
-센서가 주는 실측 3D 좌표(x/y/z가 이미 동일한 물리 단위)를 쓰므로 이 스케일 불일치가
-애초에 없습니다.
+사용해 이 문제가 없었습니다). 3D Astra 경로(`_analyze_pose_3d`)는 depth 센서가 주는
+실측 3D 좌표(x/y/z가 이미 동일한 물리 단위)를 쓰므로 이 스케일 불일치가 애초에 없고,
+바로 위 `torso_pitch_angle`도 같은 이유로 이 문제에서 자유롭습니다.
 
 이 수정으로 같은 실제 자세에 대해 계산되는 `neck_angle` 값 자체가 이전보다 커집니다
 (대략 `w/h` 배수만큼). 따라서 `TURTLE_NECK_ANGLE_THRESHOLD` 등 기존에 버그가 있던 값
@@ -384,14 +526,16 @@ threshold와 종합 점수 가중치를 `config.py`에 모아두었고, `CameraA
 수정하세요. 카메라 소스(`카메라 소스` select)와 웹캠/Astra 장치 인덱스는 여전히
 `index.html` 설정 화면에서 매 실행마다 고를 수 있습니다.
 
+
 ### 카메라 설치 기울기 보정 (`CAMERA_TILT_ANGLE_DEG`)
 
 TV 위 등 카메라를 얼굴보다 높은 위치에 달아 아래를 내려다보게(pitch) 설치하면, `neck_angle`
 (거북목) 계산이 실제 자세와 무관하게 카메라가 아래를 보는 각도만큼 체계적으로 틀어집니다.
 이 각도는 랜드마크의 세로(y)-깊이(z) 성분으로 전방 기울기를 재기 때문에, 카메라 자체의
 상하 기울기가 곧바로 편향(bias)으로 섞여 들어갑니다. (`torso`는 이제 각도가 아니라
-어깨/골반 너비 비율로 계산하므로 이 보정 대상이 아닙니다 — 위
-[등 굽음 / 허리 위험 판정](#등-굽음--허리-위험-판정-어깨골반-너비-비율) 참고.)
+목/어깨 비율(`neck_shoulder_ratio`)로 계산합니다 — 이 비율에는 아직 이 보정을 적용하지
+않았고, 카메라 피치에 영향을 받을 가능성이 있다는 점에 대한 자세한 내용은 위
+[등 굽음 / 허리 위험 판정](#등-굽음--허리-위험-판정) 참고.)
 
 - `shoulder_angle`/`pelvis_angle`(좌우 y 차이로 재는 롤 성향)과 `head_tilt_angle`,
   `spine_lean_angle`(좌우 x-y 성향)도 카메라의 상하 기울기(피치)와 원리상 거의 무관해
@@ -430,6 +574,35 @@ RULA의 신체 부위 평가 우선순위를 참고한 heuristic weighting을 �
 `main.py`의 선분 교차 기반 `_detect_leg_cross()` (`is_intersect()` 이용) 결과를 그대로
 사용해 종합점수에 별도 감점을 적용합니다. 측정 결과에는 다리 꼬기 지속 시간도
 함께 기록합니다.
+
+### 세부 항목 3단계 판정
+
+점수(0~100)를 정상/주의/위험 3단계로 나누는 기준은 `config.py`의
+`SCORE_TIER_NORMAL_MIN`(기본 85), `SCORE_TIER_CAUTION_MIN`(기본 60) 두 값입니다.
+85점 이상이면 정상, 60~84점이면 주의, 60점 미만이면 위험입니다. 이 두 값은
+`main.py` 모듈 최상단에서 `SCORE_TIER_NORMAL_MIN`/`SCORE_TIER_CAUTION_MIN`
+전역 변수로 로드해 백엔드 채점 곡선(위 [각도 threshold 판정](#각도-threshold-판정),
+[등 굽음 / 허리 위험 판정](#등-굽음--허리-위험-판정) 참고)과
+`CameraApp._score_from_angles`의 종합 점수 3단계 분류 양쪽에 그대로 쓰입니다.
+`script.js`(리포트 화면 세부 항목 표시)에도 같은 값(85/60)이 별도 상수로 하드코딩돼
+있으므로, 기준을 바꾸려면 `config.py`와 `script.js` 양쪽을 함께 수정해야 합니다.
+
+- **측정 중 상태 오버레이(`screen-4`, `status-box`)**: `CameraApp._score_from_angles`가
+  계산한 종합 점수 기준으로 `isNormal`을 `1`(정상) / `0`(주의) / `-1`(위험) 중 하나로
+  SSE에 실어 보냅니다(인식 자체가 안 된 경우는 기존과 동일하게 `2`). `script.js`의
+  `updateFrame()`이 이 값에 따라 `status-box`에 `status-normal`(초록) / `status-warning`
+  (주의, 주황) / `status-danger`(위험, 빨강) / `status-unknown`(인식 안 됨, 회색) 클래스를
+  붙입니다. 기존에는 정상/문제(빨강) 2단계뿐이었고, 지금의 `status-warning`(주황)이
+  예전 "문제" 상태의 빨간색 자리를 대신 차지하는 대신, 그 빨간색은 새로 추가된
+  `status-danger`가 이어받았습니다.
+- **최종 리포트 화면(`screen-6`, 세부 항목 4개)**: `finalReportData`에 담긴 부위별
+  평균 점수(0~100)를 `script.js`의 `setMetricUI()`가 같은 85/60 기준으로 분류해
+  `정상`/`주의`/`위험` 라벨과 `metric-status-{normal|caution|danger}`(텍스트 색),
+  `fill-{normal|caution|danger}`(막대 색) 클래스를 부여합니다. 예전에는 부위마다
+  "양호"/"안정"/"정상" 등 서로 다른 좋음-라벨과 90점 단일 기준의 2단계 분류를
+  썼는데, 지금은 4개 항목 모두 동일한 정상/주의/위험 라벨과 기준을 씁니다.
+  `index.html`의 `.metrics-card` 안, 세부 항목 목록 바로 아래에 `정상 85~100점 ·
+  주의 60~84점 · 위험 0~59점` 문구를 `help-text`로 표시해 기준을 안내합니다.
 
 ## Astra Pro 3D Depth 지원
 
@@ -775,6 +948,24 @@ API 로드 완료 시 자동 호출되어 플레이어를 생성하고(`controls
   레터박스도 나타나지 않습니다.
 
 다른 비율의 콘텐츠를 쓰게 되면 `aspect-ratio` 값들을 함께 조정해야 합니다.
+
+### 쇼츠 재생/일시정지 클릭 토글
+
+`#viewfinder-wrapper` 전체(카메라 화면 보기 버튼(`#btn-toggle-view`), 이전/다음 쇼츠
+버튼(`#btn-prev-short`/`#btn-next-short`) 제외)를 클릭하면 현재 쇼츠 영상이
+재생/일시정지 토글됩니다(`script.js`, `#viewfinder-wrapper`의 `click` 리스너).
+`viewMode === 'camera'`(카메라 화면을 보는 중)이거나 `currentIndex !== 4`면 무시합니다.
+클릭 시점의 `shortsPlayer.getPlayerState()`가 `PLAYING`이면 `pauseVideo()`, 그 외에는
+`playVideo()`를 호출합니다.
+
+`#shorts-scroll-shield`(유튜브 iframe 위에 겹쳐진 투명 오버레이, 아래
+[쇼츠 휠 스크롤 탐색](#쇼츠-휠-스크롤-탐색) 참고)는 우리가 직접 만든 일반 `<div>`라
+크로스오리진 iframe과 달리 클릭 이벤트가 정상적으로 부모(`#viewfinder-wrapper`)까지
+버블링되므로, 별도의 클릭 리스너 없이 위 위임(delegation) 방식 리스너 하나로
+쇼츠 스테이지 안쪽/바깥쪽 클릭이 모두 처리됩니다. 이전/다음 버튼은
+`e.target.closest('#btn-toggle-view, #btn-prev-short, #btn-next-short')`로 걸러내
+버튼을 누르면 재생/일시정지가 함께 토글되지 않고 원래 동작(화면 전환/영상 이동)만
+일어납니다.
 
 ### 쇼츠 휠 스크롤 탐색
 
