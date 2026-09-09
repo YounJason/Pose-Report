@@ -1756,7 +1756,7 @@ class CameraApp:
         )
 
     def generate_llm_advice(self, metrics):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={self.gemini_api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={self.gemini_api_key}"
 
         prompt = f"""
         당신은 자세 교정 전문 AI 트레이너입니다.
