@@ -1730,13 +1730,6 @@ class CameraApp:
             now = time.time()
             if now - getattr(self, "_last_ratio_debug_print", 0.0) > 1.0:
                 self._last_ratio_debug_print = now
-                print(
-                    f"[자세측정][디버그][Astra] torso_pitch_angle={torso_pitch_angle:.1f}도 "
-                    f"(round<=-{self.TORSO_PITCH_ROUND_THRESHOLD_DEG:.1f}, "
-                    f"back>={self.TORSO_PITCH_BACK_THRESHOLD_DEG:.1f}, "
-                    f"bias={self.TORSO_PITCH_BIAS_DEG:.1f})",
-                    flush=True,
-                )
 
         status_text, is_normal, health_score, metric_scores, sources = self._score_from_angles(
             neck_angle,
