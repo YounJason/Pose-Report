@@ -5,7 +5,7 @@ let privacyPollInterval = null;
 let reportLoadingTimeout = null;
 let typingInterval = null;
 
-let timeLeft = 60;
+let timeLeft = 40;
 let isPaused = false;
 
 let preCountdownActive = false;
@@ -500,7 +500,7 @@ async function showScreen(index, useFade = true) {
         worstScoreValue = null;
         worstScorePhotoSrc = null;
 
-        timeLeft = 60;
+        timeLeft = 40;
         isPaused = true;
         sittingConfirmed = false;
 
@@ -515,7 +515,7 @@ async function showScreen(index, useFade = true) {
         const startMeasurementCountdown = () => {
             preCountdownActive = false;
             hidePreCountdownOverlay();
-            timerEl.innerText = "60";
+            timerEl.innerText = "40";
 
             if (shortsPlayerReady && shortsPlayer && viewMode !== 'camera') {
                 try { shortsPlayer.playVideo(); } catch (e) {}
@@ -538,7 +538,7 @@ async function showScreen(index, useFade = true) {
                         torso: parseFloat(calcAvg(collectedMetrics.torso).toFixed(1)),
                         shoulder: parseFloat(calcAvg(collectedMetrics.shoulder).toFixed(1)),
                         pelvis: parseFloat(calcAvg(collectedMetrics.pelvis).toFixed(1)),
-                        legCrossSeconds: parseFloat((legCrossRatio * 60).toFixed(1))
+                        legCrossSeconds: parseFloat((legCrossRatio * 40).toFixed(1))
                     };
 
                     showScreen(5, true);
@@ -547,12 +547,12 @@ async function showScreen(index, useFade = true) {
         };
 
         if (isDebugMode()) {
-            timerEl.innerText = "60";
+            timerEl.innerText = "40";
             startMeasurementCountdown();
         } else {
             preCountdownActive = true;
             preCountdownValue = PRE_COUNTDOWN_START;
-            timerEl.innerText = "60";
+            timerEl.innerText = "40";
             showPreCountdownOverlay(preCountdownValue);
 
             preCountdownInterval = setInterval(() => {
@@ -812,7 +812,7 @@ function resetToInitialSetup() {
     clearInterval(typingInterval);
     typingInterval = null;
 
-    timeLeft = 60;
+    timeLeft = 40;
     isPaused = true;
     sittingConfirmed = false;
     captureLoopStarted = false;
